@@ -1,0 +1,50 @@
+{
+  "name": "supertwitter-extension",
+  "version": "1.0.1785",
+  "description": "",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "prebuild": "node version.js",
+    "build": "vite build",
+    "dev": "run-when-changed --watch src/**/**/**.* --watch popup/**/**/**.* --watch manifest.json --watch vite.config.js --watch index.html --exec \"npm run build\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jacobparis/supertwitter-extension.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/jacobparis/supertwitter-extension/issues"
+  },
+  "homepage": "https://github.com/jacobparis/supertwitter-extension#readme",
+  "dependencies": {
+    "@heroicons/react": "^2.0.13",
+    "@testing-library/dom": "^8.19.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-hotkeys-hook": "^4.0.4",
+    "react-router-dom": "^6.4.3",
+    "tiny-invariant": "^1.3.1"
+  },
+  "devDependencies": {
+    "@crxjs/vite-plugin": "^2.0.0-beta.7",
+    "@types/jquery": "^3.5.14",
+    "@types/react": "^18.0.24",
+    "@types/react-dom": "^18.0.8",
+    "@vitejs/plugin-react": "^2.2.0",
+    "autoprefixer": "^10.4.13",
+    "chrome-types": "^0.1.152",
+    "eslint": "^8.28.0",
+    "postcss": "^8.4.19",
+    "remix-flat-routes": "^0.4.8",
+    "run-when-changed": "^2.1.0",
+    "semver": "^7.3.8",
+    "tailwindcss": "^3.2.4",
+    "typescript": "^4.6.4",
+    "vite": "^3.2.4",
+    "vite-plugin-static-copy": "^0.12.0"
+  }
+}
