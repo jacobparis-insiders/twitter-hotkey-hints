@@ -1,7 +1,7 @@
 {
   "name": "Twitter",
   "manifest_version": 3,
-  "version": "1.0.1785",
+  "version": "1.2.1",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
@@ -18,7 +18,9 @@
   "permissions": [
     "storage",
     "unlimitedStorage",
-    "webRequest"
+    "webRequest",
+    "activeTab",
+    "scripting"
   ],
   "host_permissions": [
     "http://twitter.com/*",
@@ -35,7 +37,6 @@
         "https://twitter.com/*"
       ],
       "resources": [
-        "img/loader.gif",
         "icons/icon48.png"
       ]
     }

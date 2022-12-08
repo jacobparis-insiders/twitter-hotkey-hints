@@ -108,7 +108,6 @@ function recursivelySetIndexes(children) {
 }
 
 findByRole(document.body, "main").then((main) => {
-  console.log({ main })
   const root = document.createElement("div")
   root.id = "crx-root"
 
@@ -136,23 +135,9 @@ findByRole(document.body, "main").then((main) => {
   )
 })
 
-import {
-  findByRole,
-  findByText,
-  getByRole,
-  queryByText,
-} from "@testing-library/dom"
+import { findAllByTestId, findByRole, queryByText } from "@testing-library/dom"
 import invariant from "tiny-invariant"
-import { getFeeds } from "./getFeeds"
-import { PlusIcon } from "@heroicons/react/24/solid"
-import { getSessionHeaders } from "../utils/getSessionHeaders"
 import { friendlyFetch } from "../utils/friendlyFetch"
-
-const svgIcon = `
-<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-[1.75rem] h-[1.75rem]">
-  <path stroke-linecap="round" stroke-linejoin="round" d="M6 6.878V6a2.25 2.25 0 012.25-2.25h7.5A2.25 2.25 0 0118 6v.878m-12 0c.235-.083.487-.128.75-.128h10.5c.263 0 .515.045.75.128m-12 0A2.25 2.25 0 004.5 9v.878m13.5-3A2.25 2.25 0 0119.5 9v.878m0 0a2.246 2.246 0 00-.75-.128H5.25c-.263 0-.515.045-.75.128m15 0A2.25 2.25 0 0121 12v6a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 18v-6c0-.98.626-1.813 1.5-2.122" />
-</svg>
-`
 
 function useFeedButtonInjector() {
   useEffect(() => {
@@ -160,7 +145,6 @@ function useFeedButtonInjector() {
 
     let throttleLimit = 0
     const observer = new MutationObserver(() => {
-      console.log("Observer triggered", throttleLimit++)
       if (throttleLimit > 1000) {
         observer.disconnect()
       }
@@ -171,7 +155,6 @@ function useFeedButtonInjector() {
     findByRole(document.body, "navigation", { name: /primary/i }).then(
       (nav) => {
         findByRole(nav, "link", { name: /home/i }).then((homeElement) => {
-          console.log("Found home, setting observer")
           observer.observe(homeElement, { childList: true, subtree: true })
         })
       }
@@ -205,7 +188,6 @@ function useFeedButtonInjector() {
 
             if (spanText) {
               spanText.innerText = "Feeds"
-              console.log(window.location.pathname)
               // if the url is /birdfeeder then we want this bold
               spanText.style.fontWeight =
                 window.location.pathname === "/birdfeeder" ? "bold" : "normal"
@@ -264,7 +246,6 @@ function useScrapeTwitterUserInfo() {
           `https://api.twitter.com/1.1/users/show.json?user_id=${userId}`
         )
           .then((data) => {
-            console.log({ data })
             chrome.runtime.sendMessage({
               message: "setUserInfo",
               data: {
@@ -281,11 +262,352 @@ function useScrapeTwitterUserInfo() {
   }, [])
 }
 
-function Empty() {
-  useFeedButtonInjector()
-  useScrapeTwitterUserInfo()
+function useTweetObserver(callback: (tweets: Node[]) => void) {
+  useEffect(() => {
+    let previousCanonicalHref = ""
 
-  return null
+    const titleObserver = new MutationObserver(function (mutations) {
+      mutations.forEach(function (mutation) {
+        if (!isElement(mutation.target)) return
+
+        const canonicalLink = mutation.target.querySelector(
+          'link[rel="canonical"]'
+        ) as HTMLLinkElement | null
+
+        if (canonicalLink) {
+          if (canonicalLink.href !== previousCanonicalHref) {
+            previousCanonicalHref = canonicalLink.href
+            setupTweetObserver()
+          }
+        } else {
+          previousCanonicalHref = ""
+          setupTweetObserver()
+        }
+      })
+    })
+
+    let throttleLimit = 0
+    const observer = new MutationObserver((records) => {
+      if (throttleLimit > 1000) {
+        observer.disconnect()
+      }
+
+      callback(
+        records.flatMap((record) => Array.from(record.addedNodes)).flat()
+      )
+    })
+
+    titleObserver.observe(document.head, {
+      attributes: false,
+      subtree: false,
+      childList: true,
+    })
+
+    return function cleanup() {
+      titleObserver.disconnect()
+      observer.disconnect()
+    }
+
+    function setupTweetObserver() {
+      return findByRole(
+        document.body,
+        "region",
+        {
+          name: /(bookmarks|conversation|notifications|timeline|list|(s tweets))/i,
+        },
+        {
+          timeout: 10000,
+        }
+      ).then(
+        (conversationRegion) => {
+          // wait for tweets to load
+          findAllByTestId(conversationRegion, "tweet").then(() => {
+            const container = conversationRegion.lastChild?.firstChild
+
+            if (container) {
+              observer.observe(container, {
+                childList: true,
+                attributes: true,
+                attributeFilter: ["__refresh__"],
+              })
+              // Need this for first page load
+              callback(Array.from(container.childNodes))
+            }
+          })
+        },
+        () => console.error("Could not find conversation region")
+      )
+    }
+  }, [])
+}
+
+function isElement(node: Node): node is Element {
+  return node.nodeType === 1
+}
+
+function useHideDismissedTweetPages() {
+  useTweetObserver((tweets) => {
+    tweets.forEach(updateDismissClassOnChildren)
+  })
+}
+
+function updateDismissClassOnChildren(element: Node) {
+  if (!isElement(element)) return
+
+  const promoPixel = element.querySelector('[data-testid="placementTracking"]')
+  if (promoPixel) {
+    element.classList.add("dismissed")
+    return
+  }
+
+  const tweetLink = element.querySelector(
+    "a:has(time)"
+  ) as HTMLLinkElement | null
+  if (tweetLink) {
+    const id = getTweetId(tweetLink.href)
+    console.log("Checking tweet id", id, "for dismissal")
+    const dismissedTweets = new Set(
+      JSON.parse(localStorage.getItem("dismissedTweets") || "[]")
+    )
+
+    if (dismissedTweets.has(id)) {
+      element.classList.add("dismissed")
+    }
+  }
+}
+
+function useDismissTweetHotkey() {
+  useEffect(() => {
+    const listener = document.addEventListener("keyup", (event) => {
+      if (event.key === "e") {
+        if (
+          document.activeElement &&
+          document.activeElement.tagName.toUpperCase() === "ARTICLE"
+        ) {
+          const tweetLink = document.activeElement.querySelector(
+            "a:has(time)"
+          ) as HTMLLinkElement | null
+          if (tweetLink) {
+            const nearestParent = document.activeElement.closest(
+              '[data-testid="cellInnerDiv"]'
+            )
+            const isDismissed = nearestParent?.classList.contains("dismissed")
+            if (isDismissed) {
+              nearestParent?.classList.remove("dismissed")
+              markTweetUndismissed(getTweetId(tweetLink.href))
+            } else {
+              nearestParent?.classList.add("dismissed")
+              markTweetDismissed(getTweetId(tweetLink.href))
+            }
+
+            return
+          }
+        }
+
+        const url = window.location.href
+        if (url.includes("status")) {
+          if (!isTyping(document)) {
+            markTweetDismissed(url.split("/").pop())
+            const mainTweet = document.querySelector('article[tabindex="-1"]')
+            if (mainTweet) {
+              const closestParent = mainTweet.closest(
+                '[data-testid="cellInnerDiv"]'
+              )
+
+              closestParent?.classList.add("dismissed")
+            }
+          }
+        }
+      }
+    })
+
+    return function cleanup() {
+      document.removeEventListener("keyup", listener)
+    }
+
+    function markTweetDismissed(id) {
+      console.info("🗑 Dismissed tweet", id)
+
+      const dismissedTweets = new Set(
+        JSON.parse(localStorage.getItem("dismissedTweets") || "[]")
+      )
+
+      dismissedTweets.add(id)
+      localStorage.setItem(
+        "dismissedTweets",
+        JSON.stringify([...dismissedTweets])
+      )
+    }
+
+    function markTweetUndismissed(id) {
+      console.info("🗑 Restored tweet", id)
+
+      const dismissedTweets = new Set(
+        JSON.parse(localStorage.getItem("dismissedTweets") || "[]")
+      )
+
+      dismissedTweets.delete(id)
+      localStorage.setItem(
+        "dismissedTweets",
+        JSON.stringify([...dismissedTweets])
+      )
+    }
+  }, [])
+}
+
+function NavHotkeyHints() {
+  useEffect(() => {
+    const downListener = window.addEventListener("keydown", (event) => {
+      if (isTyping(document)) return
+      if (event.key !== "g") {
+        document.body.classList.remove("show-go-hotkeys")
+        return
+      }
+
+      document.body.classList.add("show-go-hotkeys")
+    })
+
+    const upListener = window.addEventListener("keyup", (event) => {
+      if (isTyping(document)) return
+      if (event.key !== "g") return
+
+      setTimeout(() => {
+        document.body.classList.remove("show-go-hotkeys")
+      }, 1000)
+    })
+
+    return function cleanup() {
+      window.removeEventListener("keydown", downListener)
+      window.removeEventListener("keyup", upListener)
+    }
+  }, [])
+
+  return (
+    <style>
+      {
+        /* css */ `
+      [data-testid^="AppTabBar_"],
+        [aria-label="Bookmarks"],
+        [aria-label="Top Articles"] {
+          position: relative;
+        }
+        
+        [data-testid^="AppTabBar_"]:after,
+        [aria-label="Bookmarks"]:after,
+        [aria-label="Top Articles"]:after {
+          display: inline-flex;
+          align-items: center;
+          border-radius: 0.25rem;
+          border: 1px solid #e2e8f0;
+          padding: 0 0.5rem;
+          font-size: 0.875rem;
+          font-weight: 500;
+          color: #418066;
+          position: absolute;
+          background: #fff;
+          opacity: 0.99;
+          top: 50%;
+          bottom: 0;
+          left: 50%;
+          height: 2em;
+          margin: auto;
+          justify-content: center;
+          box-shadow: 0 1px 2px 0 #0000000d
+        }
+
+        [aria-label^="New Tweets are available"] {
+          flex-direction: column;
+        }
+        [aria-label^="New Tweets are available"]:after {
+          content: '.';
+          display: inline-flex;
+          align-items: center;
+          border-radius: 0.25rem;
+          border: 1px solid #e2e8f0;
+          padding: 0 0.5rem;
+          font-weight: 500;
+          color: #fff;
+          opacity: 0.8;
+          top: 50%;
+          bottom: 0;
+          left: 50%;
+          height: 2em;
+          margin: auto 0.5rem;
+          justify-content: center;
+        }
+
+        .show-go-hotkeys [data-testid="AppTabBar_Home_Link"]:after {
+          content: 'H';
+        }
+
+        .show-go-hotkeys [data-testid="AppTabBar_Explore_Link"]:after {
+          content: 'E';
+        }
+
+        .show-go-hotkeys [data-testid="AppTabBar_Notifications_Link"]:after {
+          content: 'N';
+        }
+
+        .show-go-hotkeys [data-testid="AppTabBar_DirectMessage_Link"]:after {
+          content: 'M';
+        }
+
+        .show-go-hotkeys [data-testid="AppTabBar_Profile_Link"]:after {
+          content: 'P';
+        }
+
+        .show-go-hotkeys [aria-label="Bookmarks"]:after {
+          content: 'B';
+        }
+
+        .show-go-hotkeys [aria-label="Top Articles"]:after {
+          content: 'A';
+        }
+        `
+      }
+    </style>
+  )
+}
+
+function Empty() {
+  useHideDismissedTweetPages()
+  // useFeedButtonInjector()
+  useScrapeTwitterUserInfo()
+  useDismissTweetHotkey()
+
+  return (
+    <>
+      <style>
+        {
+          /* css */ `
+        .dismissed:has(article[tabindex="-1"]) {
+          opacity: 0.5;
+        }
+
+        .dismissed {
+          // display: none;
+          opacity: 0.8;
+        }
+
+        .dismissed:has(article[tabindex="0"]) article *:not([data-testid="User-Names"]):not(:has([data-testid="User-Names"])) {
+          display: none;
+        }
+
+        .dismissed:has(article[tabindex="0"]) article * {
+          padding: 0;
+        }
+
+        .dismissed:has(article[tabindex="0"]) article [data-testid="User-Names"] * {
+          display: initial !important;
+        }
+
+        
+      `.trim()
+        }
+      </style>
+      <NavHotkeyHints />
+    </>
+  )
 }
 
 async function loader(args: LoaderFunctionArgs) {
@@ -293,6 +615,22 @@ async function loader(args: LoaderFunctionArgs) {
 
   return null
 }
+
+function getTweetId(url) {
+  return url.split("/").pop()
+}
+
+function isTyping(document) {
+  if (!document.activeElement) return false
+
+  if (document.activeElement.tagName === "TEXTAREA") return true
+  if (document.activeElement.tagName === "INPUT") return true
+  if (document.activeElement.getAttribute("contenteditable")) return true
+
+  return false
+}
+
+// add a listener to see when we navigate to a tweet page, then console log whether the tweet is dismissed or not
 
 function Main() {
   useFeedButtonInjector()
@@ -303,7 +641,6 @@ function Main() {
     const listener = window.addEventListener(
       "hashchange",
       () => {
-        console.log("Hash changed", window.location.hash)
         if (window.location.hash.length < 2) {
           navigate("/")
         }
@@ -327,6 +664,10 @@ function Main() {
         #crx-root {
           flex-grow: 1;
           width: 990px;
+        }
+
+        .dismissed {
+          opacity: 0.5;
         }
       `.trim()}
       </style>
