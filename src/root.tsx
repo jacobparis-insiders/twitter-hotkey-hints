@@ -20,7 +20,7 @@ import {
   useRouteError,
   useRoutes,
 } from "react-router-dom"
-import { StrictMode, useEffect, useState } from "react"
+import { StrictMode, useEffect, useRef, useState } from "react"
 
 function ErrorBoundary() {
   let error = useRouteError()
@@ -35,8 +35,11 @@ type Route = {
   children?: Route[]
 }
 
-const ROUTES = import.meta.globEager("./routes/**/*.tsx")
-const routes: Route[] = Object.entries(ROUTES)
+const ROUTES = import.meta.globEager("./routes/**/*.tsx") as Record<
+  string,
+  object
+>
+const routes = Object.entries(ROUTES)
   .map(([path, route]) => ({
     ...route,
     path: path
@@ -135,7 +138,15 @@ findByRole(document.body, "main").then((main) => {
   )
 })
 
-import { findAllByTestId, findByRole, queryByText } from "@testing-library/dom"
+import {
+  findAllByTestId,
+  findByRole,
+  findByTestId,
+  getByTestId,
+  queryByRole,
+  queryByTestId,
+  queryByText,
+} from "@testing-library/dom"
 import invariant from "tiny-invariant"
 import { friendlyFetch } from "../utils/friendlyFetch"
 
@@ -262,11 +273,11 @@ function useScrapeTwitterUserInfo() {
   }, [])
 }
 
-function useTweetObserver(callback: (tweets: Node[]) => void) {
+function useUrlObserver(callback: (url: string) => MutationObserver | null) {
   useEffect(() => {
     let previousCanonicalHref = ""
-
-    const titleObserver = new MutationObserver(function (mutations) {
+    let targetObserver: MutationObserver | null = null
+    const urlObserver = new MutationObserver(function (mutations) {
       mutations.forEach(function (mutation) {
         if (!isElement(mutation.target)) return
 
@@ -277,15 +288,36 @@ function useTweetObserver(callback: (tweets: Node[]) => void) {
         if (canonicalLink) {
           if (canonicalLink.href !== previousCanonicalHref) {
             previousCanonicalHref = canonicalLink.href
-            setupTweetObserver()
+            targetObserver = callback(canonicalLink.href)
           }
         } else {
           previousCanonicalHref = ""
-          setupTweetObserver()
+          targetObserver = callback("")
         }
       })
     })
 
+    urlObserver.observe(document.head, {
+      attributes: false,
+      subtree: false,
+      childList: true,
+    })
+
+    return function cleanup() {
+      urlObserver.disconnect()
+      if (targetObserver) {
+        targetObserver.disconnect()
+      }
+    }
+  }, [])
+}
+
+function isElement(node: Node): node is Element {
+  return node.nodeType === 1
+}
+
+function useTweetObserver(callback: (nodes: Node[]) => void) {
+  useUrlObserver(() => {
     let throttleLimit = 0
     const observer = new MutationObserver((records) => {
       if (throttleLimit > 1000) {
@@ -297,31 +329,20 @@ function useTweetObserver(callback: (tweets: Node[]) => void) {
       )
     })
 
-    titleObserver.observe(document.head, {
-      attributes: false,
-      subtree: false,
-      childList: true,
-    })
-
-    return function cleanup() {
-      titleObserver.disconnect()
-      observer.disconnect()
-    }
-
-    function setupTweetObserver() {
-      return findByRole(
-        document.body,
-        "region",
-        {
-          name: /(bookmarks|conversation|notifications|timeline|list|(s tweets))/i,
-        },
-        {
-          timeout: 10000,
-        }
-      ).then(
-        (conversationRegion) => {
-          // wait for tweets to load
-          findAllByTestId(conversationRegion, "tweet").then(() => {
+    findByRole(
+      document.body,
+      "region",
+      {
+        name: /(bookmarks|conversation|notifications|timeline|list|(s tweets))/i,
+      },
+      {
+        timeout: 10000,
+      }
+    ).then(
+      (conversationRegion) => {
+        // wait for tweets to load
+        findAllByTestId(conversationRegion, "tweet").then(
+          () => {
             const container = conversationRegion.lastChild?.firstChild
 
             if (container) {
@@ -333,21 +354,14 @@ function useTweetObserver(callback: (tweets: Node[]) => void) {
               // Need this for first page load
               callback(Array.from(container.childNodes))
             }
-          })
-        },
-        () => console.error("Could not find conversation region")
-      )
-    }
-  }, [])
-}
+          },
+          () => console.error("Could not find tweets")
+        )
+      },
+      () => console.error("Could not find conversation region")
+    )
 
-function isElement(node: Node): node is Element {
-  return node.nodeType === 1
-}
-
-function useHideDismissedTweetPages() {
-  useTweetObserver((tweets) => {
-    tweets.forEach(updateDismissClassOnChildren)
+    return observer
   })
 }
 
@@ -365,7 +379,6 @@ function updateDismissClassOnChildren(element: Node) {
   ) as HTMLLinkElement | null
   if (tweetLink) {
     const id = getTweetId(tweetLink.href)
-    console.log("Checking tweet id", id, "for dismissal")
     const dismissedTweets = new Set(
       JSON.parse(localStorage.getItem("dismissedTweets") || "[]")
     )
@@ -378,7 +391,7 @@ function updateDismissClassOnChildren(element: Node) {
 
 function useDismissTweetHotkey() {
   useEffect(() => {
-    const listener = document.addEventListener("keyup", (event) => {
+    const listener = (event) => {
       if (event.key === "e") {
         if (
           document.activeElement &&
@@ -419,8 +432,9 @@ function useDismissTweetHotkey() {
           }
         }
       }
-    })
+    }
 
+    document.addEventListener("keyup", listener)
     return function cleanup() {
       document.removeEventListener("keyup", listener)
     }
@@ -455,125 +469,603 @@ function useDismissTweetHotkey() {
   }, [])
 }
 
-function NavHotkeyHints() {
+function useNavHotkeyHints() {
+  const homeTabHint = useRef<HTMLDivElement>(generateHint("G+H"))
+  const exploreTabHint = useRef<HTMLDivElement>(generateHint("G+E"))
+  const notificationsTabHint = useRef<HTMLDivElement>(generateHint("G+N"))
+  const messagesTabHint = useRef<HTMLDivElement>(generateHint("G+M"))
+  const bookmarksTabHint = useRef<HTMLDivElement>(generateHint("G+B"))
+  const articlesTabHint = useRef<HTMLDivElement>(generateHint("G+A"))
+  const profileTabHint = useRef<HTMLDivElement>(generateHint("G+P"))
+
   useEffect(() => {
-    const downListener = window.addEventListener("keydown", (event) => {
+    findByTestId(document.body, "AppTabBar_Home_Link").then(
+      (tab) => tab.appendChild(homeTabHint.current),
+      () => console.error("Could not find home tab")
+    )
+
+    findByTestId(document.body, "AppTabBar_Explore_Link").then(
+      (tab) => tab.appendChild(exploreTabHint.current),
+      () => console.error("Could not find explore tab")
+    )
+
+    findByTestId(document.body, "AppTabBar_Notifications_Link").then(
+      (tab) => tab.appendChild(notificationsTabHint.current),
+      () => console.error("Could not find notifications tab")
+    )
+
+    findByTestId(document.body, "AppTabBar_DirectMessage_Link").then(
+      (tab) => tab.appendChild(messagesTabHint.current),
+      () => console.error("Could not find direct message tab")
+    )
+
+    findByRole(document.body, "link", { name: /bookmarks/i }).then(
+      (tab) => tab.appendChild(bookmarksTabHint.current),
+      () => console.error("Could not find bookmarks tab")
+    )
+
+    findByRole(document.body, "link", { name: /top articles/i }).then(
+      (tab) => tab.appendChild(articlesTabHint.current),
+      () => console.error("Could not find articles tab")
+    )
+
+    findByTestId(document.body, "AppTabBar_Profile_Link").then(
+      (tab) => tab.appendChild(profileTabHint.current),
+      () => console.error("Could not find profile tab")
+    )
+
+    window.addEventListener("keydown", downListener)
+    window.addEventListener("keyup", upListener)
+
+    return function cleanup() {
+      homeTabHint.current.remove()
+      exploreTabHint.current.remove()
+      notificationsTabHint.current.remove()
+      messagesTabHint.current.remove()
+      bookmarksTabHint.current.remove()
+      articlesTabHint.current.remove()
+      profileTabHint.current.remove()
+
+      window.removeEventListener("keydown", downListener)
+      window.removeEventListener("keyup", upListener)
+    }
+
+    function downListener(event) {
       if (isTyping(document)) return
       if (event.key !== "g") {
-        document.body.classList.remove("show-go-hotkeys")
+        homeTabHint.current.classList.add("opacity-0")
+        exploreTabHint.current.classList.add("opacity-0")
+        notificationsTabHint.current.classList.add("opacity-0")
+        messagesTabHint.current.classList.add("opacity-0")
+        bookmarksTabHint.current.classList.add("opacity-0")
+        articlesTabHint.current.classList.add("opacity-0")
+        profileTabHint.current.classList.add("opacity-0")
+
         return
       }
 
-      document.body.classList.add("show-go-hotkeys")
-    })
+      homeTabHint.current.classList.remove("opacity-0")
+      exploreTabHint.current.classList.remove("opacity-0")
+      notificationsTabHint.current.classList.remove("opacity-0")
+      messagesTabHint.current.classList.remove("opacity-0")
+      bookmarksTabHint.current.classList.remove("opacity-0")
+      articlesTabHint.current.classList.remove("opacity-0")
+      profileTabHint.current.classList.remove("opacity-0")
+    }
 
-    const upListener = window.addEventListener("keyup", (event) => {
+    function upListener(event) {
       if (isTyping(document)) return
       if (event.key !== "g") return
 
       setTimeout(() => {
-        document.body.classList.remove("show-go-hotkeys")
+        homeTabHint.current.classList.add("opacity-0")
+        exploreTabHint.current.classList.add("opacity-0")
+        notificationsTabHint.current.classList.add("opacity-0")
+        messagesTabHint.current.classList.add("opacity-0")
+        bookmarksTabHint.current.classList.add("opacity-0")
+        articlesTabHint.current.classList.add("opacity-0")
+        profileTabHint.current.classList.add("opacity-0")
       }, 1000)
-    })
-
-    return function cleanup() {
-      window.removeEventListener("keydown", downListener)
-      window.removeEventListener("keyup", upListener)
     }
   }, [])
 
-  return (
-    <style>
-      {
-        /* css */ `
-      [data-testid^="AppTabBar_"],
-        [aria-label="Bookmarks"],
-        [aria-label="Top Articles"] {
-          position: relative;
-        }
-        
-        [data-testid^="AppTabBar_"]:after,
-        [aria-label="Bookmarks"]:after,
-        [aria-label="Top Articles"]:after {
-          display: inline-flex;
-          align-items: center;
-          border-radius: 0.25rem;
-          border: 1px solid #e2e8f0;
-          padding: 0 0.5rem;
-          font-size: 0.875rem;
-          font-weight: 500;
-          color: #418066;
-          position: absolute;
-          background: #fff;
-          opacity: 0.99;
-          top: 50%;
-          bottom: 0;
-          left: 50%;
-          height: 2em;
-          margin: auto;
-          justify-content: center;
-          box-shadow: 0 1px 2px 0 #0000000d
-        }
+  function generateHint(key: string) {
+    const hint = document.createElement("kbd")
+    hint.classList.add(
+      "inline-flex",
+      "items-center",
+      "rounded",
+      "border",
+      "border-gray-200",
+      "px-2",
+      "font-sans",
+      "text-sm",
+      "font-medium",
+      "text-gray-500",
+      "shadow-sm",
+      "bg-white/95"
+    )
+    hint.textContent = key
+    const hintWrapper = document.createElement("div")
+    hintWrapper.classList.add(
+      "absolute",
+      "bottom-0",
+      "left-0",
+      "flex",
+      "pl-6",
+      "pb-1",
+      "opacity-0",
+      "transition-opacity",
+      "duration-100"
+    )
+    hintWrapper.appendChild(hint)
 
-        [aria-label^="New Tweets are available"] {
-          flex-direction: column;
-        }
-        [aria-label^="New Tweets are available"]:after {
-          content: '.';
-          display: inline-flex;
-          align-items: center;
-          border-radius: 0.25rem;
-          border: 1px solid #e2e8f0;
-          padding: 0 0.5rem;
-          font-weight: 500;
-          color: #fff;
-          opacity: 0.8;
-          top: 50%;
-          bottom: 0;
-          left: 50%;
-          height: 2em;
-          margin: auto 0.5rem;
-          justify-content: center;
-        }
+    return hintWrapper
+  }
+}
 
-        .show-go-hotkeys [data-testid="AppTabBar_Home_Link"]:after {
-          content: 'H';
-        }
+function useNotificationsPageHotkeys() {
+  const [url, setUrl] = useState<string>()
+  const mentionsTabHint = useRef<HTMLDivElement>(generateHint("G+R"))
+  const notificationsTabHint = useRef<HTMLDivElement>(generateHint("G+N"))
 
-        .show-go-hotkeys [data-testid="AppTabBar_Explore_Link"]:after {
-          content: 'E';
-        }
+  useUrlObserver((url) => {
+    setUrl(url)
 
-        .show-go-hotkeys [data-testid="AppTabBar_Notifications_Link"]:after {
-          content: 'N';
-        }
+    return null
+  })
 
-        .show-go-hotkeys [data-testid="AppTabBar_DirectMessage_Link"]:after {
-          content: 'M';
-        }
+  useEffect(() => {
+    cleanup()
 
-        .show-go-hotkeys [data-testid="AppTabBar_Profile_Link"]:after {
-          content: 'P';
-        }
+    const url = new URL(window.location.href)
+    if (!url.pathname.startsWith("/notifications")) return
 
-        .show-go-hotkeys [aria-label="Bookmarks"]:after {
-          content: 'B';
-        }
+    findByTestId(document.body, "primaryColumn").then((column) => {
+      const mentionsTab = column.querySelector(
+        'a[href="/notifications/mentions"]'
+      )
 
-        .show-go-hotkeys [aria-label="Top Articles"]:after {
-          content: 'A';
-        }
-        `
+      const notificationsTab = column.querySelector('a[href="/notifications"]')
+
+      mentionsTab?.appendChild(mentionsTabHint.current)
+      notificationsTab?.appendChild(notificationsTabHint.current)
+
+      window.addEventListener("keydown", downListener)
+      window.addEventListener("keyup", upListener)
+    })
+
+    function cleanup() {
+      mentionsTabHint.current.remove()
+      notificationsTabHint.current.remove()
+
+      window.removeEventListener("keydown", downListener)
+      window.removeEventListener("keyup", upListener)
+    }
+
+    return cleanup
+
+    function downListener(event) {
+      if (isTyping(document)) return
+
+      if (event.key !== "g") {
+        mentionsTabHint.current.classList.add("opacity-0")
+        notificationsTabHint.current.classList.add("opacity-0")
+
+        return
       }
-    </style>
-  )
+
+      mentionsTabHint.current.classList.remove("opacity-0")
+      notificationsTabHint.current.classList.remove("opacity-0")
+    }
+
+    function upListener(event) {
+      if (isTyping(document)) return
+
+      if (event.key !== "g") return
+
+      setTimeout(() => {
+        mentionsTabHint.current.classList.add("opacity-0")
+        notificationsTabHint.current.classList.add("opacity-0")
+      }, 1000)
+    }
+  }, [url])
+
+  function generateHint(key: string) {
+    const hint = document.createElement("kbd")
+    hint.classList.add(
+      "inline-flex",
+      "items-center",
+      "rounded",
+      "border",
+      "border-gray-200",
+      "px-2",
+      "font-sans",
+      "text-sm",
+      "font-medium",
+      "text-gray-500",
+      "shadow-sm",
+      "bg-white/95"
+    )
+    hint.textContent = key
+    const hintWrapper = document.createElement("div")
+    hintWrapper.classList.add(
+      "absolute",
+      "inset-y-0",
+      "right-0",
+      "flex",
+      "items-center",
+      "pr-6",
+      "pb-1",
+      "opacity-0",
+      "transition-opacity",
+      "duration-100"
+    )
+    hintWrapper.appendChild(hint)
+
+    return hintWrapper
+  }
+}
+
+function useDraftScheduledTabHotkeys() {
+  const [url, setUrl] = useState<string>()
+  const draftsButtonHint = useRef<HTMLDivElement>(generateHint("G+F"))
+  const scheduledButtonHint = useRef<HTMLDivElement>(generateHint("G+T"))
+
+  useUrlObserver((url) => {
+    setUrl(url)
+
+    return null
+  })
+
+  useEffect(() => {
+    const url = new URL(window.location.href)
+    console.log({ url })
+    if (!url.pathname.startsWith("/compose/tweet/unsent")) return
+
+    findByTestId(document.body, "ScrollSnap-List").then(
+      (column) => {
+        const draftsButton = column.querySelector(
+          'a[href="/compose/tweet/unsent/drafts"]'
+        )
+        const scheduledButton = column.querySelector(
+          'a[href="/compose/tweet/unsent/scheduled"]'
+        )
+
+        if (draftsButton && scheduledButton) {
+          draftsButton.appendChild(draftsButtonHint.current)
+          scheduledButton.appendChild(scheduledButtonHint.current)
+
+          window.addEventListener("keydown", downListener)
+          window.addEventListener("keyup", upListener)
+        }
+      },
+      () => console.error("Failed to find Drafts or Scheduled tabs")
+    )
+
+    return function cleanup() {
+      draftsButtonHint.current.remove()
+      scheduledButtonHint.current.remove()
+
+      window.removeEventListener("keydown", downListener)
+      window.removeEventListener("keyup", upListener)
+    }
+
+    function downListener(event) {
+      if (isTyping(document)) return
+      if (event.key !== "g") {
+        draftsButtonHint.current.classList.add("opacity-0")
+        scheduledButtonHint.current.classList.add("opacity-0")
+
+        return
+      }
+
+      draftsButtonHint.current.classList.remove("opacity-0")
+      scheduledButtonHint.current.classList.remove("opacity-0")
+    }
+
+    function upListener(event) {
+      if (isTyping(document)) return
+      if (event.key !== "g") return
+
+      setTimeout(() => {
+        draftsButtonHint.current.classList.add("opacity-0")
+        scheduledButtonHint.current.classList.add("opacity-0")
+      }, 1000)
+    }
+  }, [url])
+
+  function generateHint(key: string) {
+    const hint = document.createElement("kbd")
+    hint.classList.add(
+      "inline-flex",
+      "items-center",
+      "rounded",
+      "border",
+      "border-gray-200",
+      "px-2",
+      "font-sans",
+      "text-sm",
+      "font-medium",
+      "text-gray-500",
+      "shadow-sm",
+      "bg-white/95"
+    )
+    hint.textContent = key
+    const hintWrapper = document.createElement("div")
+    hintWrapper.classList.add(
+      "absolute",
+      "inset-y-0",
+      "right-0",
+      "flex",
+      "items-center",
+      "pr-6",
+      "pb-1",
+      "opacity-0",
+      "transition-opacity",
+      "duration-100"
+    )
+    hintWrapper.appendChild(hint)
+
+    return hintWrapper
+  }
+}
+
+function useComposerHotkeys() {
+  const [url, setUrl] = useState<string>()
+  const draftsButtonHint = useRef<HTMLDivElement>(generateHint("G+F"))
+  const closeButtonHint = useRef<HTMLDivElement>(generateHint("ESC"))
+
+  useUrlObserver((url) => {
+    setUrl(url)
+
+    return null
+  })
+
+  useEffect(() => {
+    cleanup()
+
+    const url = new URL(window.location.href)
+    if (url.pathname !== "/compose/tweet") return
+
+    findByTestId(document.body, "unsentButton").then(
+      (draftsButton) => {
+        draftsButton.appendChild(draftsButtonHint.current)
+        findByTestId(document.body, "app-bar-close").then((closeButton) => {
+          closeButton.appendChild(closeButtonHint.current)
+        })
+
+        window.addEventListener("keydown", downListener)
+        window.addEventListener("keyup", upListener)
+      },
+      () => console.error("Failed to find drafts button")
+    )
+
+    function cleanup() {
+      draftsButtonHint.current.remove()
+      closeButtonHint.current.remove()
+
+      window.removeEventListener("keydown", downListener)
+      window.removeEventListener("keyup", upListener)
+    }
+
+    return cleanup
+
+    function downListener(event) {
+      if (isTyping(document)) return
+
+      if (event.key !== "g") {
+        draftsButtonHint.current.classList.add("opacity-0")
+        closeButtonHint.current.classList.add("opacity-0")
+
+        return
+      }
+
+      draftsButtonHint.current.classList.remove("opacity-0")
+      closeButtonHint.current.classList.remove("opacity-0")
+    }
+
+    function upListener(event) {
+      if (isTyping(document)) return
+
+      if (event.key !== "g") return
+
+      setTimeout(() => {
+        draftsButtonHint.current.classList.add("opacity-0")
+        closeButtonHint.current.classList.add("opacity-0")
+      }, 1000)
+    }
+  }, [url])
+
+  function generateHint(key: string) {
+    const hint = document.createElement("kbd")
+    hint.classList.add(
+      "inline-flex",
+      "items-center",
+      "rounded",
+      "border",
+      "border-gray-200",
+      "px-2",
+      "font-sans",
+      "text-sm",
+      "font-medium",
+      "text-gray-500",
+      "shadow-sm",
+      "bg-white/95"
+    )
+    hint.textContent = key
+    const hintWrapper = document.createElement("div")
+    hintWrapper.classList.add(
+      "absolute",
+      "inset-y-0",
+      "right-0",
+      "flex",
+      "items-center",
+      "pl-6",
+      "pt-4",
+      "opacity-0",
+      "transition-opacity",
+      "duration-100"
+    )
+    hintWrapper.appendChild(hint)
+
+    return hintWrapper
+  }
+}
+
+function useNewTweetHotkeys() {
+  const [url, setUrl] = useState<number>()
+  const newTweetButtonHint = useRef<HTMLElement>(generateHint("."))
+
+  useTweetObserver((tweets) => {
+    setUrl(tweets.length)
+
+    return null
+  })
+
+  useEffect(() => {
+    cleanup()
+
+    findByRole(document.body, "button", {
+      name: /new tweets/i,
+      hidden: true,
+    }).then(
+      (newTweetPrompt) => {
+        newTweetPrompt.style.flexDirection = "row"
+        newTweetPrompt.appendChild(newTweetButtonHint.current)
+      },
+      () => console.error("Failed to find new tweets button")
+    )
+
+    function cleanup() {
+      newTweetButtonHint.current.remove()
+      newTweetButtonHint.current.innerHTML = ""
+    }
+
+    return cleanup
+  }, [url])
+
+  function generateHint(key: string) {
+    const hint = document.createElement("kbd")
+    hint.classList.add(
+      "inline-flex",
+      "items-center",
+      "rounded",
+      "border",
+      "border-gray-200",
+      "px-2",
+      "font-sans",
+      "text-sm",
+      "font-medium",
+      "text-gray-500",
+      "shadow-sm",
+      "bg-white/95"
+    )
+    hint.textContent = key
+    const hintWrapper = document.createElement("div")
+    hintWrapper.classList.add("flex", "items-center", "mx-2")
+    hintWrapper.appendChild(hint)
+
+    return hintWrapper
+  }
+}
+
+function useTweetHotkeys() {
+  const likeButtonHint = useRef<HTMLElement>(generateHint("L"))
+  const retweetButtonHint = useRef<HTMLElement>(generateHint("T"))
+  const replyButtonHint = useRef<HTMLElement>(generateHint("R"))
+  const shareButtonHint = useRef<HTMLElement>(generateHint("S"))
+
+  useEffect(() => {
+    const focusListener = ({ target }) => {
+      if (!(target instanceof HTMLElement)) return
+      if (target.tagName !== "ARTICLE") return
+      if (target.dataset.testid !== "tweet") return
+
+      console.log("Focused on tweet")
+
+      const likeButton = queryByTestId(target, "like")
+      likeButton?.appendChild(likeButtonHint.current)
+
+      const unlikeButton = queryByTestId(target, "unlike")
+      unlikeButton?.appendChild(likeButtonHint.current)
+
+      const retweetButton = queryByTestId(target, "retweet")
+      retweetButton?.appendChild(retweetButtonHint.current)
+
+      const unretweetButton = queryByTestId(target, "unretweet")
+      unretweetButton?.appendChild(retweetButtonHint.current)
+
+      const replyButton = queryByTestId(target, "reply")
+      replyButton?.appendChild(replyButtonHint.current)
+
+      const shareButton = queryByRole(target, "button", {
+        name: /share tweet/i,
+      })
+      shareButton?.appendChild(shareButtonHint.current)
+    }
+
+    const blurListener = () => {
+      likeButtonHint.current.remove()
+      retweetButtonHint.current.remove()
+      replyButtonHint.current.remove()
+      shareButtonHint.current.remove()
+    }
+
+    document.addEventListener("focusin", focusListener)
+    document.addEventListener("focusout", blurListener)
+
+    return function cleanup() {
+      document.removeEventListener("focusin", focusListener)
+      document.removeEventListener("focusout", blurListener)
+    }
+  }, [])
+
+  function generateHint(key: string) {
+    const hint = document.createElement("kbd")
+    hint.classList.add(
+      "inline-flex",
+      "items-center",
+      "rounded",
+      "border",
+      "border-gray-200",
+      "px-2",
+      "font-sans",
+      "text-sm",
+      "font-medium",
+      "text-gray-500",
+      "shadow-sm",
+      "bg-white/95"
+    )
+    hint.textContent = key
+    const hintWrapper = document.createElement("div")
+    hintWrapper.classList.add(
+      "absolute",
+      "left-0",
+      "-translate-x-full",
+      "px-1",
+      "flex"
+    )
+    hintWrapper.appendChild(hint)
+
+    return hintWrapper
+  }
 }
 
 function Empty() {
-  useHideDismissedTweetPages()
+  useTweetObserver((tweets) => {
+    tweets.forEach(updateDismissClassOnChildren)
+  })
+
   // useFeedButtonInjector()
   useScrapeTwitterUserInfo()
   useDismissTweetHotkey()
+  useNavHotkeyHints()
+  useNotificationsPageHotkeys()
+  useDraftScheduledTabHotkeys()
+  useComposerHotkeys()
+  useNewTweetHotkeys()
+  useTweetHotkeys()
 
   return (
     <>
@@ -600,12 +1092,9 @@ function Empty() {
         .dismissed:has(article[tabindex="0"]) article [data-testid="User-Names"] * {
           display: initial !important;
         }
-
-        
       `.trim()
         }
       </style>
-      <NavHotkeyHints />
     </>
   )
 }
@@ -638,18 +1127,15 @@ function Main() {
 
   const navigate = useNavigate()
   useEffect(() => {
-    const listener = window.addEventListener(
-      "hashchange",
-      () => {
-        if (window.location.hash.length < 2) {
-          navigate("/")
-        }
-      },
-      false
-    )
+    const listener = () => {
+      if (window.location.hash.length < 2) {
+        navigate("/")
+      }
+    }
 
+    window.addEventListener("hashchange", listener, false)
     return function cleanup() {
-      window.removeEventListener("hashchange", listener)
+      window.removeEventListener("hashchange", listener, false)
     }
   }, [])
 
