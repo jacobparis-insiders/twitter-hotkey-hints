@@ -815,6 +815,9 @@ function useComposerHotkeys() {
   const [url, setUrl] = useState<string>()
   const draftsButtonHint = useRef<HTMLDivElement>(generateHint("G+F"))
   const closeButtonHint = useRef<HTMLDivElement>(generateHint("ESC"))
+  const tweetButtonHint = useRef<HTMLDivElement>(
+    generateInlineHint("CMD+ENTER")
+  )
 
   useUrlObserver((url) => {
     setUrl(url)
@@ -827,6 +830,14 @@ function useComposerHotkeys() {
 
     const url = new URL(window.location.href)
     if (url.pathname !== "/compose/tweet") return
+
+    findByTestId(document.body, "tweetButton").then(
+      (tweetButton) => {
+        tweetButton.style.flexDirection = "row"
+        tweetButton.appendChild(tweetButtonHint.current)
+      },
+      () => console.error("Failed to find tweet button")
+    )
 
     findByTestId(document.body, "unsentButton").then(
       (draftsButton) => {
@@ -844,6 +855,7 @@ function useComposerHotkeys() {
     function cleanup() {
       draftsButtonHint.current.remove()
       closeButtonHint.current.remove()
+      tweetButtonHint.current.remove()
 
       window.removeEventListener("keydown", downListener)
       window.removeEventListener("keyup", upListener)
@@ -911,6 +923,30 @@ function useComposerHotkeys() {
 
     return hintWrapper
   }
+
+  function generateInlineHint(key: string) {
+    const hint = document.createElement("kbd")
+    hint.classList.add(
+      "inline-flex",
+      "items-center",
+      "rounded",
+      "border",
+      "border-gray-200",
+      "px-2",
+      "font-sans",
+      "text-sm",
+      "font-medium",
+      "text-gray-500",
+      "shadow-sm",
+      "bg-white/95"
+    )
+    hint.textContent = key
+    const hintWrapper = document.createElement("div")
+    hintWrapper.classList.add("flex", "items-center", "mx-2")
+    hintWrapper.appendChild(hint)
+
+    return hintWrapper
+  }
 }
 
 function useNewTweetHotkeys() {
@@ -924,8 +960,6 @@ function useNewTweetHotkeys() {
   })
 
   useEffect(() => {
-    cleanup()
-
     findByRole(document.body, "button", {
       name: /new tweets/i,
       hidden: true,
@@ -937,12 +971,10 @@ function useNewTweetHotkeys() {
       () => console.error("Failed to find new tweets button")
     )
 
-    function cleanup() {
+    return function cleanup() {
       newTweetButtonHint.current.remove()
       newTweetButtonHint.current.innerHTML = ""
     }
-
-    return cleanup
   }, [url])
 
   function generateHint(key: string) {
@@ -975,7 +1007,14 @@ function useTweetHotkeys() {
   const retweetButtonHint = useRef<HTMLElement>(generateHint("T"))
   const replyButtonHint = useRef<HTMLElement>(generateHint("R"))
   const shareButtonHint = useRef<HTMLElement>(generateHint("S"))
-
+  const additionalActionsHint = useRef<HTMLElement>(
+    document.createElement("div")
+  )
+  const muteActionHint = useRef<HTMLElement>(generateActionHint("Mute", "U"))
+  const blockActionHint = useRef<HTMLElement>(generateActionHint("Block", "X"))
+  const bookmarkActionHint = useRef<HTMLElement>(
+    generateActionHint("Bookmark", "B")
+  )
   useEffect(() => {
     const focusListener = ({ target }) => {
       if (!(target instanceof HTMLElement)) return
@@ -1003,13 +1042,38 @@ function useTweetHotkeys() {
         name: /share tweet/i,
       })
       shareButton?.appendChild(shareButtonHint.current)
+
+      const header = getByTestId(document.body, "primaryColumn")
+      header?.firstElementChild?.firstElementChild?.appendChild(
+        additionalActionsHint.current
+      )
+      additionalActionsHint.current.classList.add(
+        "flex",
+        "absolute",
+        "right-0",
+        "bottom-0",
+        "px-1",
+        "translate-y-1/2",
+        "gap-x-1"
+      )
+
+      additionalActionsHint.current.appendChild(bookmarkActionHint.current)
+      additionalActionsHint.current.appendChild(muteActionHint.current)
+      additionalActionsHint.current.appendChild(blockActionHint.current)
     }
 
-    const blurListener = () => {
+    const blurListener = ({ target }) => {
+      if (!(target instanceof HTMLElement)) return
+      if (target.tagName !== "ARTICLE") return
+      if (target.dataset.testid !== "tweet") return
+
       likeButtonHint.current.remove()
       retweetButtonHint.current.remove()
       replyButtonHint.current.remove()
       shareButtonHint.current.remove()
+      additionalActionsHint.current.remove()
+      muteActionHint.current.remove()
+      blockActionHint.current.remove()
     }
 
     document.addEventListener("focusin", focusListener)
@@ -1034,18 +1098,51 @@ function useTweetHotkeys() {
       "text-sm",
       "font-medium",
       "text-gray-500",
-      "shadow-sm",
       "bg-white/95"
     )
     hint.textContent = key
     const hintWrapper = document.createElement("div")
     hintWrapper.classList.add(
+      "px-1",
+      "flex",
       "absolute",
       "left-0",
-      "-translate-x-full",
-      "px-1",
-      "flex"
+      "-translate-x-full"
     )
+    hintWrapper.appendChild(hint)
+
+    return hintWrapper
+  }
+
+  function generateActionHint(label: string, key: string) {
+    const hint = document.createElement("kbd")
+    hint.classList.add(
+      "inline-flex",
+      "items-center",
+      "rounded",
+      "border",
+      "border-gray-200",
+      "px-2",
+      "font-medium",
+      "font-sans"
+    )
+    hint.textContent = key
+    const hintWrapper = document.createElement("div")
+    hintWrapper.classList.add(
+      "inline-flex",
+      "items-center",
+      "rounded",
+      "border",
+      "border-gray-200",
+      "pl-2",
+      "py-1",
+      "pr-1",
+      "text-sm",
+      "text-gray-500",
+      "bg-white/95",
+      "gap-x-2"
+    )
+    hintWrapper.textContent = label
     hintWrapper.appendChild(hint)
 
     return hintWrapper
