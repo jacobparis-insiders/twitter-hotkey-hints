@@ -2,141 +2,18 @@ import "chrome-types"
 
 import * as ReactDOM from "react-dom/client"
 import "./index.css"
-import {
-  createHashRouter,
-  createRoutesFromElements,
-  HashRouter,
-  Link,
-  LoaderFunctionArgs,
-  Outlet,
-  Route,
-  RouterProvider,
-  Routes,
-  useLoaderData,
-  useLocation,
-  useMatches,
-  useNavigate,
-  useParams,
-  useRouteError,
-  useRoutes,
-} from "react-router-dom"
 import { StrictMode, useEffect, useRef, useState } from "react"
 
-function ErrorBoundary() {
-  let error = useRouteError()
-  console.error(error)
-  return null
-}
+const root = document.createElement("div")
+root.id = "supertwitter"
 
-type Route = {
-  path: string
-  element: JSX.Element
-  loader?: (args: LoaderFunctionArgs) => Promise<any>
-  children?: Route[]
-}
+document.body.appendChild(root)
 
-const ROUTES = import.meta.globEager("./routes/**/*.tsx") as Record<
-  string,
-  object
->
-const routes = Object.entries(ROUTES)
-  .map(([path, route]) => ({
-    ...route,
-    path: path
-      .replace("./routes/", "")
-      .replace(".tsx", "")
-      .replace("$", ":")
-      .split("."),
-  }))
-  .sort((a, b) => a.path.length - b.path.length)
-
-function processRoute(routes, route) {
-  const [first, ...rest] = route.path
-  const child = routes.find((child) => child.path === first)
-
-  // This is a leaf node
-  if (!rest.length) {
-    const Element = route.default
-
-    if (first === "_index") {
-      routes.push({
-        path: first,
-        element: <Element />,
-        index: true,
-      })
-    } else {
-      routes.push({
-        path: first,
-        element: Element ? <Element /> : null,
-        loader: route.loader,
-        children: [],
-      })
-    }
-
-    return routes
-  }
-
-  if (child) {
-    processRoute(child.children, { ...route, path: rest })
-
-    return routes
-  }
-
-  return routes
-}
-
-const children = [] as Route[]
-
-for (const route of routes) {
-  processRoute(children, route)
-}
-
-function recursivelySetIndexes(children) {
-  return children.map((child) => {
-    const { children, index, path, ...props } = child
-
-    if (index) {
-      return {
-        index: true,
-        ...props,
-      }
-    }
-
-    return {
-      path: `${path}/*`,
-      ...props,
-      children: children ? recursivelySetIndexes(children) : undefined,
-    }
-  })
-}
-
-findByRole(document.body, "main").then((main) => {
-  const root = document.createElement("div")
-  root.id = "crx-root"
-
-  main.insertAdjacentElement("afterend", root)
-
-  ReactDOM.createRoot(root).render(
-    <StrictMode>
-      <RouterProvider
-        router={createHashRouter([
-          {
-            path: "/super",
-            element: <Main />,
-            loader,
-            errorElement: <ErrorBoundary />,
-            children: recursivelySetIndexes(children),
-          },
-          {
-            element: <Empty />,
-            index: true,
-            errorElement: <ErrorBoundary />,
-          },
-        ])}
-      />
-    </StrictMode>
-  )
-})
+ReactDOM.createRoot(root).render(
+  <StrictMode>
+    <SuperTwitter />
+  </StrictMode>
+)
 
 import {
   findAllByTestId,
@@ -145,133 +22,7 @@ import {
   getByTestId,
   queryByRole,
   queryByTestId,
-  queryByText,
 } from "@testing-library/dom"
-import invariant from "tiny-invariant"
-import { friendlyFetch } from "../utils/friendlyFetch"
-
-function useFeedButtonInjector() {
-  useEffect(() => {
-    let feedElement: HTMLLinkElement | null
-
-    let throttleLimit = 0
-    const observer = new MutationObserver(() => {
-      if (throttleLimit > 1000) {
-        observer.disconnect()
-      }
-
-      injectButton()
-    })
-
-    findByRole(document.body, "navigation", { name: /primary/i }).then(
-      (nav) => {
-        findByRole(nav, "link", { name: /home/i }).then((homeElement) => {
-          observer.observe(homeElement, { childList: true, subtree: true })
-        })
-      }
-    )
-
-    injectButton()
-
-    return function cleanup() {
-      observer.disconnect()
-      if (feedElement) {
-        invariant(feedElement.parentElement)
-        feedElement.parentElement.removeChild(feedElement)
-      }
-    }
-
-    function injectButton() {
-      findByRole(document.body, "navigation", { name: /primary/i }).then(
-        (nav) => {
-          findByRole(nav, "link", { name: /home/i }).then((homeElement) => {
-            if (feedElement) {
-              invariant(feedElement.parentElement)
-              feedElement.parentElement.removeChild(feedElement)
-            }
-
-            ;(homeElement as HTMLLinkElement).href = "/home#"
-            feedElement = homeElement.cloneNode(true) as HTMLLinkElement
-            const spanText = queryByText(feedElement, "Home")
-            feedElement.ariaLabel = "Feeds"
-            feedElement.href = "/birdfeeder#/super/feed"
-            feedElement.dataset.testid = "AppTabBar_Feed_Link"
-
-            if (spanText) {
-              spanText.innerText = "Feeds"
-              // if the url is /birdfeeder then we want this bold
-              spanText.style.fontWeight =
-                window.location.pathname === "/birdfeeder" ? "bold" : "normal"
-            }
-
-            const div = feedElement.querySelector("div")
-            if (div) {
-              div.style.backgroundColor = "transparent"
-              div.classList.add("rounded-full", "hover:!bg-gray-200")
-            }
-
-            const icon = feedElement.querySelector("svg")
-            invariant(icon)
-            invariant(icon.parentElement)
-
-            icon.parentElement.innerHTML =
-              window.location.pathname === "/birdfeeder"
-                ? `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-[1.75rem] h-[1.75rem]">
-                    <path d="M15 3.75H9v16.5h6V3.75zM16.5 20.25h3.375c1.035 0 1.875-.84 1.875-1.875V5.625c0-1.036-.84-1.875-1.875-1.875H16.5v16.5zM4.125 3.75H7.5v16.5H4.125a1.875 1.875 0 01-1.875-1.875V5.625c0-1.036.84-1.875 1.875-1.875z" />
-                  </svg>
-                `
-                : `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-[1.75rem] h-[1.75rem]">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 4.5v15m6-15v15m-10.875 0h15.75c.621 0 1.125-.504 1.125-1.125V5.625c0-.621-.504-1.125-1.125-1.125H4.125C3.504 4.5 3 5.004 3 5.625v12.75c0 .621.504 1.125 1.125 1.125z" />
-                  </svg>
-                `
-
-            homeElement.insertAdjacentElement("afterend", feedElement)
-          })
-        }
-      )
-    }
-  }, [])
-}
-
-function useScrapeTwitterUserInfo() {
-  useEffect(() => {
-    chrome.runtime
-      .sendMessage({ message: "getUserInfo" })
-      .then((data) => {
-        if (
-          data.cacheTime &&
-          data.cacheTime > Date.now() - 1000 * 60 * 60 * 24
-        ) {
-          throw new Error()
-        }
-
-        const html = document.body.innerHTML
-        const matchRegex = /"users":{"entities":{"(\d+)"/
-        const matches = matchRegex.exec(html)
-        const userId = matches ? matches[1] : null
-
-        if (!userId) throw new Error()
-
-        return friendlyFetch(
-          "userInfo",
-          `https://api.twitter.com/1.1/users/show.json?user_id=${userId}`
-        )
-          .then((data) => {
-            chrome.runtime.sendMessage({
-              message: "setUserInfo",
-              data: {
-                id: userId,
-                img: data.profile_image_url_https,
-                name: data.name,
-                username: data.screen_name,
-              },
-            })
-          })
-          .catch(console.error)
-      })
-      .catch(console.error)
-  }, [])
-}
 
 function useUrlObserver(callback: (url: string) => MutationObserver | null) {
   useEffect(() => {
@@ -1149,13 +900,11 @@ function useTweetHotkeys() {
   }
 }
 
-function Empty() {
+function SuperTwitter() {
   useTweetObserver((tweets) => {
     tweets.forEach(updateDismissClassOnChildren)
   })
 
-  // useFeedButtonInjector()
-  useScrapeTwitterUserInfo()
   useDismissTweetHotkey()
   useNavHotkeyHints()
   useNotificationsPageHotkeys()
@@ -1196,12 +945,6 @@ function Empty() {
   )
 }
 
-async function loader(args: LoaderFunctionArgs) {
-  console.log("Root loader")
-
-  return null
-}
-
 function getTweetId(url) {
   return url.split("/").pop()
 }
@@ -1214,49 +957,4 @@ function isTyping(document) {
   if (document.activeElement.getAttribute("contenteditable")) return true
 
   return false
-}
-
-// add a listener to see when we navigate to a tweet page, then console log whether the tweet is dismissed or not
-
-function Main() {
-  useFeedButtonInjector()
-  useScrapeTwitterUserInfo()
-
-  const navigate = useNavigate()
-  useEffect(() => {
-    const listener = () => {
-      if (window.location.hash.length < 2) {
-        navigate("/")
-      }
-    }
-
-    window.addEventListener("hashchange", listener, false)
-    return function cleanup() {
-      window.removeEventListener("hashchange", listener, false)
-    }
-  }, [])
-
-  return (
-    <div className="w-[990px] text-[15px]">
-      <style>
-        {`
-        main {
-          display: none !important;
-        }
-
-        #crx-root {
-          flex-grow: 1;
-          width: 990px;
-        }
-
-        .dismissed {
-          opacity: 0.5;
-        }
-      `.trim()}
-      </style>
-      <div className="flex justify-between items-stretch">
-        <Outlet />
-      </div>
-    </div>
-  )
 }

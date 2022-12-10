@@ -1,7 +1,7 @@
 {
   "name": "Twitter",
   "manifest_version": 3,
-  "version": "1.4.3",
+  "version": "1.5.1",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
