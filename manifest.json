@@ -1,26 +1,19 @@
 {
-  "name": "Twitter",
+  "name": "Twitter Productivity Suite",
   "manifest_version": 3,
-  "version": "1.5.1",
+  "version": "1.6.1",
   "icons": {
-    "16": "icons/icon16.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
-  },
-  "background": {
-    "service_worker": "src/auth-worker"
+    "16": "icons/icon.png",
+    "48": "icons/icon_3x.png",
+    "128": "icons/icon_8x.png"
   },
   "action": {
-    "default_icon": "icons/icon19.png",
-    "default_title": "browser action demo",
+    "default_icon": "icons/icon.png",
+    "default_title": "Twitter Productivity Suite",
     "default_popup": "index.html"
   },
   "permissions": [
-    "storage",
-    "unlimitedStorage",
-    "webRequest",
-    "activeTab",
-    "scripting"
+    "storage"
   ],
   "host_permissions": [
     "http://twitter.com/*",

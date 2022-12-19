@@ -6,7 +6,11 @@ module.exports = {
     "./popup/**/*.{css,js,ts,jsx,tsx}",
   ],
   theme: {
-    extend: {},
+    extend: {
+      boxShadow: {
+        crisp: "inset 0px -1px 0px rgb(207 217 222)",
+      },
+    },
   },
   plugins: [],
 }

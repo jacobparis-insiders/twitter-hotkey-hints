@@ -9,8 +9,6 @@ export async function friendlyFetch(key, url, options = {}) {
     key,
   })
 
-  console.log({ cachedData })
-
   if (cachedData) {
     const { cacheTime, ...data } = cachedData
 
@@ -53,8 +51,6 @@ export async function friendlyFetch(key, url, options = {}) {
 
   const cacheRemaining = Number(cacheReset) * 1000 - Date.now()
   console.info(`  Saving data to cache, ${cacheRemaining}ms remaining`)
-
-  console.log({ response })
   chrome.runtime.sendMessage({
     message: "writeCache",
     key,

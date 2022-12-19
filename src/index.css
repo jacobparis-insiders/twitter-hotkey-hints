@@ -1,3 +1,36 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+.minimized:has(article[tabindex="-1"]) {
+  opacity: 0.5;
+}
+
+.minimized {
+  opacity: 0.8;
+}
+
+.minimized:has(article[tabindex="0"])
+  article
+  *:not([data-testid="User-Names"]):not(:has([data-testid="User-Names"])) {
+  display: none;
+}
+
+.minimized:has(article[tabindex="0"]) article {
+  padding: 0.25rem 1rem;
+}
+.minimized:has(article[tabindex="0"]) article * {
+  padding: 0;
+}
+
+.minimized:has(article[tabindex="0"]) article [data-testid="User-Names"] * {
+  display: initial !important;
+}
+
+.minimized:has(article[tabindex="0"]) article [data-testid="unminimize"] {
+  display: inline-grid !important;
+}
+
+.minimized:has(article[tabindex="0"]) article [data-testid="unminimize"] * {
+  display: inline-grid !important;
+}

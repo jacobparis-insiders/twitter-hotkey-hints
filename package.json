@@ -1,6 +1,6 @@
 {
   "name": "supertwitter-extension",
-  "version": "1.5.1",
+  "version": "1.6.1",
   "description": "",
   "main": "index.js",
   "type": "module",
@@ -21,6 +21,7 @@
   },
   "homepage": "https://github.com/jacobparis/supertwitter-extension#readme",
   "dependencies": {
+    "@headlessui/react": "^1.7.5",
     "@heroicons/react": "^2.0.13",
     "@testing-library/dom": "^8.19.0",
     "@testing-library/user-event": "^14.4.3",

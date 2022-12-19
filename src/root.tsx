@@ -1,19 +1,5 @@
-import "chrome-types"
-
-import * as ReactDOM from "react-dom/client"
 import "./index.css"
-import { StrictMode, useEffect, useRef, useState } from "react"
-
-const root = document.createElement("div")
-root.id = "supertwitter"
-
-document.body.appendChild(root)
-
-ReactDOM.createRoot(root).render(
-  <StrictMode>
-    <SuperTwitter />
-  </StrictMode>
-)
+import "chrome-types"
 
 import {
   findAllByTestId,
@@ -24,46 +10,158 @@ import {
   queryByTestId,
 } from "@testing-library/dom"
 
-function useUrlObserver(callback: (url: string) => MutationObserver | null) {
-  useEffect(() => {
-    let previousCanonicalHref = ""
-    let targetObserver: MutationObserver | null = null
-    const urlObserver = new MutationObserver(function (mutations) {
-      mutations.forEach(function (mutation) {
-        if (!isElement(mutation.target)) return
+function logVerboseError(...args: any[]) {
+  return
 
-        const canonicalLink = mutation.target.querySelector(
-          'link[rel="canonical"]'
-        ) as HTMLLinkElement | null
-
-        if (canonicalLink) {
-          if (canonicalLink.href !== previousCanonicalHref) {
-            previousCanonicalHref = canonicalLink.href
-            targetObserver = callback(canonicalLink.href)
-          }
-        } else {
-          previousCanonicalHref = ""
-          targetObserver = callback("")
-        }
-      })
-    })
-
-    urlObserver.observe(document.head, {
-      attributes: false,
-      subtree: false,
-      childList: true,
-    })
-
-    return function cleanup() {
-      urlObserver.disconnect()
-      if (targetObserver) {
-        targetObserver.disconnect()
-      }
-    }
-  }, [])
+  console.error(...args)
 }
 
-function isElement(node: Node): node is Element {
+chrome.storage.local
+  .get([
+    "tweetHotkeyHintsDisabled",
+    "navigationHotkeyHintsDisabled",
+    "minimizeTweetsDisabled",
+  ])
+  .then((flags) => {
+    return Object.fromEntries(
+      Object.entries(flags).map(([key, value]) => [key, JSON.parse(value)])
+    )
+  })
+  .then((flags) => {
+    if (!flags.navigationHotkeyHintsDisabled) {
+      useNavHotkeyHints()
+      useNotificationsPageHotkeys()
+      useDraftScheduledTabHotkeys()
+      useComposerHotkeys()
+      useNewTweetHotkeys()
+    }
+
+    if (!flags.minimizeTweetsDisabled) {
+      useMinimizeTweetHotkey()
+      useTweetObserver((tweets) => {
+        tweets.forEach(updateMinimizeClassOnChildren)
+        tweets.forEach(async (tweet) => {
+          if (!isElement(tweet)) return
+          const existingMinimizeButton = queryByTestId(tweet, "minimize")
+          if (!existingMinimizeButton) {
+            queryByTestId(tweet, "reply")
+              ?.closest('[role="group"]')
+              ?.appendChild(createMinimizeButton())
+          }
+
+          const article = tweet.querySelector("article")
+          if (article) {
+            const existingUnminimizeButton = queryByTestId(tweet, "unminimize")
+            if (!existingUnminimizeButton) {
+              article.appendChild(createUnminimizeButton())
+            }
+          }
+        })
+      })
+
+      function createMinimizeButton() {
+        const minimizeButton = document.createElement("div")
+        minimizeButton.classList.add("inline-grid")
+        minimizeButton.addEventListener("click", (event) => {
+          const target = event.target as HTMLDivElement
+          if (!target) return
+
+          const article = target.closest("article")
+          if (!article) return
+
+          const tweetLink: HTMLLinkElement = article.querySelector(
+            "a:has(time)"
+          ) as HTMLLinkElement
+          if (!tweetLink) return
+
+          const nearestParent = article.closest('[data-testid="cellInnerDiv"]')
+
+          nearestParent?.classList.add("minimized")
+          markTweetMinimized(getTweetId(tweetLink.href))
+        })
+        minimizeButton.innerHTML = /* html */ `
+          <button
+            class="group focus:outline-none inline-grid justify-center items-center relative"
+            data-testid="minimize"
+            aria-label="Minimize tweet"
+            title="Minimize"
+            tabindex="0"
+            type="button"
+          >
+          <div class="relative inline-grid justify-center text-[#536471] items-center group-hover:text-[#1d9bf0] group-focus:text-[#1d9bf0] transition-colors duration-200">
+              <div class="opacity-0 rounded-full group-hover:opacity-100 group-focus:opacity-100 group-focus:ring-2 transition-opacity  [[data-focusvisible-polyfill][data-testid='tweet']_&]:focus:ring-blue-300 duration-200 bg-[#1d9bf01a] absolute inset-0 -m-2" ></div>
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.75" stroke="currentColor" class="w-6 h-6">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5" />
+              </svg>
+            </div>
+          </button>`
+
+        return minimizeButton
+      }
+
+      function createUnminimizeButton() {
+        const unminimizeButton = document.createElement("div")
+        unminimizeButton.classList.add("absolute", "inset-0", "hidden")
+        unminimizeButton.dataset.testid = "unminimize"
+        unminimizeButton.addEventListener("click", (event) => {
+          event.preventDefault()
+
+          const target = event.target as HTMLDivElement
+          if (!target) return
+
+          const article = target.closest("article")
+          if (!article) return
+
+          const tweetLink: HTMLLinkElement = article.querySelector(
+            "a:has(time)"
+          ) as HTMLLinkElement
+          if (!tweetLink) return
+
+          const nearestParent = article.closest('[data-testid="cellInnerDiv"]')
+
+          nearestParent?.classList.remove("minimized")
+          markTweetUnminimized(getTweetId(tweetLink.href))
+        })
+
+        return unminimizeButton
+      }
+    }
+
+    if (!flags.navigationHotkeyHintsDisabled) {
+      useTweetHotkeys()
+    }
+  })
+
+function useUrlObserver(callback: (url: string) => void) {
+  let previousCanonicalHref = ""
+  const urlObserver = new MutationObserver(function (mutations) {
+    mutations.forEach(function (mutation) {
+      if (!isElement(mutation.target)) return
+
+      const canonicalLink = mutation.target.querySelector(
+        'link[rel="canonical"]'
+      ) as HTMLLinkElement | null
+
+      if (canonicalLink) {
+        if (canonicalLink.href !== previousCanonicalHref) {
+          previousCanonicalHref = canonicalLink.href
+          callback(canonicalLink.href)
+        }
+      } else {
+        previousCanonicalHref = ""
+        callback("")
+      }
+    })
+  })
+
+  urlObserver.observe(document.head, {
+    attributes: false,
+    subtree: false,
+    childList: true,
+  })
+}
+
+function isElement(node: Node): node is HTMLElement {
   return node.nodeType === 1
 }
 
@@ -106,219 +204,211 @@ function useTweetObserver(callback: (nodes: Node[]) => void) {
               callback(Array.from(container.childNodes))
             }
           },
-          () => console.error("Could not find tweets")
+          () => logVerboseError("Could not find tweets")
         )
       },
-      () => console.error("Could not find conversation region")
+      () => logVerboseError("Could not find conversation region")
     )
-
-    return observer
   })
 }
 
-function updateDismissClassOnChildren(element: Node) {
+function updateMinimizeClassOnChildren(element: Node) {
   if (!isElement(element)) return
 
+  // Auto minimize ads
   const promoPixel = element.querySelector('[data-testid="placementTracking"]')
   if (promoPixel) {
-    element.classList.add("dismissed")
+    element.classList.add("minimized")
     return
   }
 
+  const tweetText = element.querySelector('[data-testid="tweetText"]')
+  if (tweetText) {
+    const emojiAlts = Array.from(tweetText.querySelectorAll("img[alt]")).map(
+      (img) => img.alt
+    )
+
+    const fullText = [tweetText.textContent, ...emojiAlts]
+      .join(" ")
+      .toLowerCase()
+    chrome.storage.local.get("mutedWords", ({ mutedWords }) => {
+      const parsedMutedWords = JSON.parse(mutedWords)
+
+      if (parsedMutedWords.some((word) => fullText.includes(word))) {
+        element.classList.add("minimized")
+        return
+      }
+    })
+  }
+
+  // Minimize from list
   const tweetLink = element.querySelector(
     "a:has(time)"
   ) as HTMLLinkElement | null
   if (tweetLink) {
     const id = getTweetId(tweetLink.href)
-    const dismissedTweets = new Set(
-      JSON.parse(localStorage.getItem("dismissedTweets") || "[]")
+    const minimizedTweets = new Set(
+      JSON.parse(localStorage.getItem("minimizedTweets") || "[]")
     )
 
-    if (dismissedTweets.has(id)) {
-      element.classList.add("dismissed")
+    if (minimizedTweets.has(id)) {
+      element.classList.add("minimized")
     }
   }
 }
 
-function useDismissTweetHotkey() {
-  useEffect(() => {
-    const listener = (event) => {
-      if (event.key === "e") {
-        if (
-          document.activeElement &&
-          document.activeElement.tagName.toUpperCase() === "ARTICLE"
-        ) {
-          const tweetLink = document.activeElement.querySelector(
-            "a:has(time)"
-          ) as HTMLLinkElement | null
-          if (tweetLink) {
-            const nearestParent = document.activeElement.closest(
+function useMinimizeTweetHotkey() {
+  const listener = (event) => {
+    if (event.key === "e") {
+      if (
+        document.activeElement &&
+        document.activeElement.tagName.toUpperCase() === "ARTICLE"
+      ) {
+        const tweetLink = document.activeElement.querySelector(
+          "a:has(time)"
+        ) as HTMLLinkElement | null
+        if (tweetLink) {
+          const nearestParent = document.activeElement.closest(
+            '[data-testid="cellInnerDiv"]'
+          )
+          const isMinimized = nearestParent?.classList.contains("minimized")
+          if (isMinimized) {
+            nearestParent?.classList.remove("minimized")
+            markTweetUnminimized(getTweetId(tweetLink.href))
+          } else {
+            nearestParent?.classList.add("minimized")
+            markTweetMinimized(getTweetId(tweetLink.href))
+          }
+
+          return
+        }
+      }
+
+      const url = window.location.href
+      if (url.includes("status")) {
+        if (!isTyping(document)) {
+          markTweetMinimized(url.split("/").pop())
+          const mainTweet = document.querySelector('article[tabindex="-1"]')
+          if (mainTweet) {
+            const closestParent = mainTweet.closest(
               '[data-testid="cellInnerDiv"]'
             )
-            const isDismissed = nearestParent?.classList.contains("dismissed")
-            if (isDismissed) {
-              nearestParent?.classList.remove("dismissed")
-              markTweetUndismissed(getTweetId(tweetLink.href))
-            } else {
-              nearestParent?.classList.add("dismissed")
-              markTweetDismissed(getTweetId(tweetLink.href))
-            }
 
-            return
-          }
-        }
-
-        const url = window.location.href
-        if (url.includes("status")) {
-          if (!isTyping(document)) {
-            markTweetDismissed(url.split("/").pop())
-            const mainTweet = document.querySelector('article[tabindex="-1"]')
-            if (mainTweet) {
-              const closestParent = mainTweet.closest(
-                '[data-testid="cellInnerDiv"]'
-              )
-
-              closestParent?.classList.add("dismissed")
-            }
+            closestParent?.classList.add("minimized")
           }
         }
       }
     }
+  }
 
-    document.addEventListener("keyup", listener)
-    return function cleanup() {
-      document.removeEventListener("keyup", listener)
-    }
+  document.addEventListener("keyup", listener)
+}
+function markTweetMinimized(id) {
+  console.info("🗑 Minimized tweet", id)
 
-    function markTweetDismissed(id) {
-      console.info("🗑 Dismissed tweet", id)
+  const minimizedTweets = new Set(
+    JSON.parse(localStorage.getItem("minimizedTweets") || "[]")
+  )
 
-      const dismissedTweets = new Set(
-        JSON.parse(localStorage.getItem("dismissedTweets") || "[]")
-      )
+  minimizedTweets.add(id)
+  localStorage.setItem("minimizedTweets", JSON.stringify([...minimizedTweets]))
+}
 
-      dismissedTweets.add(id)
-      localStorage.setItem(
-        "dismissedTweets",
-        JSON.stringify([...dismissedTweets])
-      )
-    }
+function markTweetUnminimized(id) {
+  console.info("🗑 Restored tweet", id)
 
-    function markTweetUndismissed(id) {
-      console.info("🗑 Restored tweet", id)
+  const minimizedTweets = new Set(
+    JSON.parse(localStorage.getItem("minimizedTweets") || "[]")
+  )
 
-      const dismissedTweets = new Set(
-        JSON.parse(localStorage.getItem("dismissedTweets") || "[]")
-      )
-
-      dismissedTweets.delete(id)
-      localStorage.setItem(
-        "dismissedTweets",
-        JSON.stringify([...dismissedTweets])
-      )
-    }
-  }, [])
+  minimizedTweets.delete(id)
+  localStorage.setItem("minimizedTweets", JSON.stringify([...minimizedTweets]))
 }
 
 function useNavHotkeyHints() {
-  const homeTabHint = useRef<HTMLDivElement>(generateHint("G+H"))
-  const exploreTabHint = useRef<HTMLDivElement>(generateHint("G+E"))
-  const notificationsTabHint = useRef<HTMLDivElement>(generateHint("G+N"))
-  const messagesTabHint = useRef<HTMLDivElement>(generateHint("G+M"))
-  const bookmarksTabHint = useRef<HTMLDivElement>(generateHint("G+B"))
-  const articlesTabHint = useRef<HTMLDivElement>(generateHint("G+A"))
-  const profileTabHint = useRef<HTMLDivElement>(generateHint("G+P"))
+  const homeTabHint = generateHint("G+H")
+  const exploreTabHint = generateHint("G+E")
+  const notificationsTabHint = generateHint("G+N")
+  const messagesTabHint = generateHint("G+M")
+  const bookmarksTabHint = generateHint("G+B")
+  const articlesTabHint = generateHint("G+A")
+  const profileTabHint = generateHint("G+P")
 
-  useEffect(() => {
-    findByTestId(document.body, "AppTabBar_Home_Link").then(
-      (tab) => tab.appendChild(homeTabHint.current),
-      () => console.error("Could not find home tab")
-    )
+  findByTestId(document.body, "AppTabBar_Home_Link").then(
+    (tab) => tab.appendChild(homeTabHint),
+    () => logVerboseError("Could not find home tab")
+  )
 
-    findByTestId(document.body, "AppTabBar_Explore_Link").then(
-      (tab) => tab.appendChild(exploreTabHint.current),
-      () => console.error("Could not find explore tab")
-    )
+  findByTestId(document.body, "AppTabBar_Explore_Link").then(
+    (tab) => tab.appendChild(exploreTabHint),
+    () => logVerboseError("Could not find explore tab")
+  )
 
-    findByTestId(document.body, "AppTabBar_Notifications_Link").then(
-      (tab) => tab.appendChild(notificationsTabHint.current),
-      () => console.error("Could not find notifications tab")
-    )
+  findByTestId(document.body, "AppTabBar_Notifications_Link").then(
+    (tab) => tab.appendChild(notificationsTabHint),
+    () => logVerboseError("Could not find notifications tab")
+  )
 
-    findByTestId(document.body, "AppTabBar_DirectMessage_Link").then(
-      (tab) => tab.appendChild(messagesTabHint.current),
-      () => console.error("Could not find direct message tab")
-    )
+  findByTestId(document.body, "AppTabBar_DirectMessage_Link").then(
+    (tab) => tab.appendChild(messagesTabHint),
+    () => logVerboseError("Could not find direct message tab")
+  )
 
-    findByRole(document.body, "link", { name: /bookmarks/i }).then(
-      (tab) => tab.appendChild(bookmarksTabHint.current),
-      () => console.error("Could not find bookmarks tab")
-    )
+  findByRole(document.body, "link", { name: /bookmarks/i }).then(
+    (tab) => tab.appendChild(bookmarksTabHint),
+    () => logVerboseError("Could not find bookmarks tab")
+  )
 
-    findByRole(document.body, "link", { name: /top articles/i }).then(
-      (tab) => tab.appendChild(articlesTabHint.current),
-      () => console.error("Could not find articles tab")
-    )
+  findByRole(document.body, "link", { name: /top articles/i }).then(
+    (tab) => tab.appendChild(articlesTabHint),
+    () => logVerboseError("Could not find articles tab")
+  )
 
-    findByTestId(document.body, "AppTabBar_Profile_Link").then(
-      (tab) => tab.appendChild(profileTabHint.current),
-      () => console.error("Could not find profile tab")
-    )
+  findByTestId(document.body, "AppTabBar_Profile_Link").then(
+    (tab) => tab.appendChild(profileTabHint),
+    () => logVerboseError("Could not find profile tab")
+  )
 
-    window.addEventListener("keydown", downListener)
-    window.addEventListener("keyup", upListener)
+  window.addEventListener("keydown", downListener)
+  window.addEventListener("keyup", upListener)
 
-    return function cleanup() {
-      homeTabHint.current.remove()
-      exploreTabHint.current.remove()
-      notificationsTabHint.current.remove()
-      messagesTabHint.current.remove()
-      bookmarksTabHint.current.remove()
-      articlesTabHint.current.remove()
-      profileTabHint.current.remove()
+  function downListener(event) {
+    if (isTyping(document)) return
+    if (event.key !== "g") {
+      homeTabHint.classList.add("opacity-0")
+      exploreTabHint.classList.add("opacity-0")
+      notificationsTabHint.classList.add("opacity-0")
+      messagesTabHint.classList.add("opacity-0")
+      bookmarksTabHint.classList.add("opacity-0")
+      articlesTabHint.classList.add("opacity-0")
+      profileTabHint.classList.add("opacity-0")
 
-      window.removeEventListener("keydown", downListener)
-      window.removeEventListener("keyup", upListener)
+      return
     }
 
-    function downListener(event) {
-      if (isTyping(document)) return
-      if (event.key !== "g") {
-        homeTabHint.current.classList.add("opacity-0")
-        exploreTabHint.current.classList.add("opacity-0")
-        notificationsTabHint.current.classList.add("opacity-0")
-        messagesTabHint.current.classList.add("opacity-0")
-        bookmarksTabHint.current.classList.add("opacity-0")
-        articlesTabHint.current.classList.add("opacity-0")
-        profileTabHint.current.classList.add("opacity-0")
+    homeTabHint.classList.remove("opacity-0")
+    exploreTabHint.classList.remove("opacity-0")
+    notificationsTabHint.classList.remove("opacity-0")
+    messagesTabHint.classList.remove("opacity-0")
+    bookmarksTabHint.classList.remove("opacity-0")
+    articlesTabHint.classList.remove("opacity-0")
+    profileTabHint.classList.remove("opacity-0")
+  }
 
-        return
-      }
+  function upListener(event) {
+    if (isTyping(document)) return
+    if (event.key !== "g") return
 
-      homeTabHint.current.classList.remove("opacity-0")
-      exploreTabHint.current.classList.remove("opacity-0")
-      notificationsTabHint.current.classList.remove("opacity-0")
-      messagesTabHint.current.classList.remove("opacity-0")
-      bookmarksTabHint.current.classList.remove("opacity-0")
-      articlesTabHint.current.classList.remove("opacity-0")
-      profileTabHint.current.classList.remove("opacity-0")
-    }
-
-    function upListener(event) {
-      if (isTyping(document)) return
-      if (event.key !== "g") return
-
-      setTimeout(() => {
-        homeTabHint.current.classList.add("opacity-0")
-        exploreTabHint.current.classList.add("opacity-0")
-        notificationsTabHint.current.classList.add("opacity-0")
-        messagesTabHint.current.classList.add("opacity-0")
-        bookmarksTabHint.current.classList.add("opacity-0")
-        articlesTabHint.current.classList.add("opacity-0")
-        profileTabHint.current.classList.add("opacity-0")
-      }, 1000)
-    }
-  }, [])
+    setTimeout(() => {
+      homeTabHint.classList.add("opacity-0")
+      exploreTabHint.classList.add("opacity-0")
+      notificationsTabHint.classList.add("opacity-0")
+      messagesTabHint.classList.add("opacity-0")
+      bookmarksTabHint.classList.add("opacity-0")
+      articlesTabHint.classList.add("opacity-0")
+      profileTabHint.classList.add("opacity-0")
+    }, 1000)
+  }
 
   function generateHint(key: string) {
     const hint = document.createElement("kbd")
@@ -329,12 +419,11 @@ function useNavHotkeyHints() {
       "border",
       "border-gray-200",
       "px-2",
-      "font-sans",
       "text-sm",
       "font-medium",
       "text-gray-500",
-      "shadow-sm",
-      "bg-white/95"
+      "bg-[#f7f9f9]",
+      "shadow-crisp"
     )
     hint.textContent = key
     const hintWrapper = document.createElement("div")
@@ -356,21 +445,11 @@ function useNavHotkeyHints() {
 }
 
 function useNotificationsPageHotkeys() {
-  const [url, setUrl] = useState<string>()
-  const mentionsTabHint = useRef<HTMLDivElement>(generateHint("G+R"))
-  const notificationsTabHint = useRef<HTMLDivElement>(generateHint("G+N"))
+  const mentionsTabHint = generateHint("G+R")
+  const notificationsTabHint = generateHint("G+N")
 
   useUrlObserver((url) => {
-    setUrl(url)
-
-    return null
-  })
-
-  useEffect(() => {
-    cleanup()
-
-    const url = new URL(window.location.href)
-    if (!url.pathname.startsWith("/notifications")) return
+    if (!url.startsWith("/notifications")) return null
 
     findByTestId(document.body, "primaryColumn").then((column) => {
       const mentionsTab = column.querySelector(
@@ -379,35 +458,27 @@ function useNotificationsPageHotkeys() {
 
       const notificationsTab = column.querySelector('a[href="/notifications"]')
 
-      mentionsTab?.appendChild(mentionsTabHint.current)
-      notificationsTab?.appendChild(notificationsTabHint.current)
+      mentionsTab?.appendChild(mentionsTabHint)
+      notificationsTab?.appendChild(notificationsTabHint)
 
       window.addEventListener("keydown", downListener)
       window.addEventListener("keyup", upListener)
     })
 
-    function cleanup() {
-      mentionsTabHint.current.remove()
-      notificationsTabHint.current.remove()
-
-      window.removeEventListener("keydown", downListener)
-      window.removeEventListener("keyup", upListener)
-    }
-
-    return cleanup
+    return null
 
     function downListener(event) {
       if (isTyping(document)) return
 
       if (event.key !== "g") {
-        mentionsTabHint.current.classList.add("opacity-0")
-        notificationsTabHint.current.classList.add("opacity-0")
+        mentionsTabHint.classList.add("opacity-0")
+        notificationsTabHint.classList.add("opacity-0")
 
         return
       }
 
-      mentionsTabHint.current.classList.remove("opacity-0")
-      notificationsTabHint.current.classList.remove("opacity-0")
+      mentionsTabHint.classList.remove("opacity-0")
+      notificationsTabHint.classList.remove("opacity-0")
     }
 
     function upListener(event) {
@@ -416,11 +487,11 @@ function useNotificationsPageHotkeys() {
       if (event.key !== "g") return
 
       setTimeout(() => {
-        mentionsTabHint.current.classList.add("opacity-0")
-        notificationsTabHint.current.classList.add("opacity-0")
+        mentionsTabHint.classList.add("opacity-0")
+        notificationsTabHint.classList.add("opacity-0")
       }, 1000)
     }
-  }, [url])
+  })
 
   function generateHint(key: string) {
     const hint = document.createElement("kbd")
@@ -431,12 +502,12 @@ function useNotificationsPageHotkeys() {
       "border",
       "border-gray-200",
       "px-2",
-      "font-sans",
+
       "text-sm",
       "font-medium",
       "text-gray-500",
-      "shadow-sm",
-      "bg-white/95"
+      "bg-[#f7f9f9]",
+      "shadow-crisp"
     )
     hint.textContent = key
     const hintWrapper = document.createElement("div")
@@ -459,20 +530,12 @@ function useNotificationsPageHotkeys() {
 }
 
 function useDraftScheduledTabHotkeys() {
-  const [url, setUrl] = useState<string>()
-  const draftsButtonHint = useRef<HTMLDivElement>(generateHint("G+F"))
-  const scheduledButtonHint = useRef<HTMLDivElement>(generateHint("G+T"))
+  const draftsButtonHint = generateHint("G+F")
+  const scheduledButtonHint = generateHint("G+T")
 
-  useUrlObserver((url) => {
-    setUrl(url)
-
-    return null
-  })
-
-  useEffect(() => {
+  useUrlObserver(() => {
     const url = new URL(window.location.href)
-    console.log({ url })
-    if (!url.pathname.startsWith("/compose/tweet/unsent")) return
+    if (!url.pathname.startsWith("/compose/tweet/unsent")) return null
 
     findByTestId(document.body, "ScrollSnap-List").then(
       (column) => {
@@ -484,35 +547,29 @@ function useDraftScheduledTabHotkeys() {
         )
 
         if (draftsButton && scheduledButton) {
-          draftsButton.appendChild(draftsButtonHint.current)
-          scheduledButton.appendChild(scheduledButtonHint.current)
+          draftsButton.appendChild(draftsButtonHint)
+          scheduledButton.appendChild(scheduledButtonHint)
 
           window.addEventListener("keydown", downListener)
           window.addEventListener("keyup", upListener)
         }
       },
-      () => console.error("Failed to find Drafts or Scheduled tabs")
+      () => logVerboseError("Failed to find Drafts or Scheduled tabs")
     )
 
-    return function cleanup() {
-      draftsButtonHint.current.remove()
-      scheduledButtonHint.current.remove()
-
-      window.removeEventListener("keydown", downListener)
-      window.removeEventListener("keyup", upListener)
-    }
+    return null
 
     function downListener(event) {
       if (isTyping(document)) return
       if (event.key !== "g") {
-        draftsButtonHint.current.classList.add("opacity-0")
-        scheduledButtonHint.current.classList.add("opacity-0")
+        draftsButtonHint.classList.add("opacity-0")
+        scheduledButtonHint.classList.add("opacity-0")
 
         return
       }
 
-      draftsButtonHint.current.classList.remove("opacity-0")
-      scheduledButtonHint.current.classList.remove("opacity-0")
+      draftsButtonHint.classList.remove("opacity-0")
+      scheduledButtonHint.classList.remove("opacity-0")
     }
 
     function upListener(event) {
@@ -520,11 +577,11 @@ function useDraftScheduledTabHotkeys() {
       if (event.key !== "g") return
 
       setTimeout(() => {
-        draftsButtonHint.current.classList.add("opacity-0")
-        scheduledButtonHint.current.classList.add("opacity-0")
+        draftsButtonHint.classList.add("opacity-0")
+        scheduledButtonHint.classList.add("opacity-0")
       }, 1000)
     }
-  }, [url])
+  })
 
   function generateHint(key: string) {
     const hint = document.createElement("kbd")
@@ -535,12 +592,12 @@ function useDraftScheduledTabHotkeys() {
       "border",
       "border-gray-200",
       "px-2",
-      "font-sans",
+
       "text-sm",
       "font-medium",
       "text-gray-500",
-      "shadow-sm",
-      "bg-white/95"
+      "bg-[#f7f9f9]",
+      "shadow-crisp"
     )
     hint.textContent = key
     const hintWrapper = document.createElement("div")
@@ -563,69 +620,49 @@ function useDraftScheduledTabHotkeys() {
 }
 
 function useComposerHotkeys() {
-  const [url, setUrl] = useState<string>()
-  const draftsButtonHint = useRef<HTMLDivElement>(generateHint("G+F"))
-  const closeButtonHint = useRef<HTMLDivElement>(generateHint("ESC"))
-  const tweetButtonHint = useRef<HTMLDivElement>(
-    generateInlineHint("CMD+ENTER")
-  )
+  const draftsButtonHint = generateHint("G+F")
+  const closeButtonHint = generateHint("ESC")
+  const tweetButtonHint = generateInlineHint("CMD+ENTER")
 
-  useUrlObserver((url) => {
-    setUrl(url)
-
-    return null
-  })
-
-  useEffect(() => {
-    cleanup()
-
+  useUrlObserver(() => {
     const url = new URL(window.location.href)
-    if (url.pathname !== "/compose/tweet") return
+    if (url.pathname !== "/compose/tweet") return null
 
     findByTestId(document.body, "tweetButton").then(
       (tweetButton) => {
         tweetButton.style.flexDirection = "row"
-        tweetButton.appendChild(tweetButtonHint.current)
+        tweetButton.appendChild(tweetButtonHint)
       },
-      () => console.error("Failed to find tweet button")
+      () => logVerboseError("Failed to find tweet button")
     )
 
     findByTestId(document.body, "unsentButton").then(
       (draftsButton) => {
-        draftsButton.appendChild(draftsButtonHint.current)
+        draftsButton.appendChild(draftsButtonHint)
         findByTestId(document.body, "app-bar-close").then((closeButton) => {
-          closeButton.appendChild(closeButtonHint.current)
+          closeButton.appendChild(closeButtonHint)
         })
 
         window.addEventListener("keydown", downListener)
         window.addEventListener("keyup", upListener)
       },
-      () => console.error("Failed to find drafts button")
+      () => logVerboseError("Failed to find drafts button")
     )
 
-    function cleanup() {
-      draftsButtonHint.current.remove()
-      closeButtonHint.current.remove()
-      tweetButtonHint.current.remove()
-
-      window.removeEventListener("keydown", downListener)
-      window.removeEventListener("keyup", upListener)
-    }
-
-    return cleanup
+    return null
 
     function downListener(event) {
       if (isTyping(document)) return
 
       if (event.key !== "g") {
-        draftsButtonHint.current.classList.add("opacity-0")
-        closeButtonHint.current.classList.add("opacity-0")
+        draftsButtonHint.classList.add("opacity-0")
+        closeButtonHint.classList.add("opacity-0")
 
         return
       }
 
-      draftsButtonHint.current.classList.remove("opacity-0")
-      closeButtonHint.current.classList.remove("opacity-0")
+      draftsButtonHint.classList.remove("opacity-0")
+      closeButtonHint.classList.remove("opacity-0")
     }
 
     function upListener(event) {
@@ -634,11 +671,11 @@ function useComposerHotkeys() {
       if (event.key !== "g") return
 
       setTimeout(() => {
-        draftsButtonHint.current.classList.add("opacity-0")
-        closeButtonHint.current.classList.add("opacity-0")
+        draftsButtonHint.classList.add("opacity-0")
+        closeButtonHint.classList.add("opacity-0")
       }, 1000)
     }
-  }, [url])
+  })
 
   function generateHint(key: string) {
     const hint = document.createElement("kbd")
@@ -649,12 +686,12 @@ function useComposerHotkeys() {
       "border",
       "border-gray-200",
       "px-2",
-      "font-sans",
+
       "text-sm",
       "font-medium",
       "text-gray-500",
-      "shadow-sm",
-      "bg-white/95"
+      "bg-[#f7f9f9]",
+      "shadow-crisp"
     )
     hint.textContent = key
     const hintWrapper = document.createElement("div")
@@ -681,15 +718,11 @@ function useComposerHotkeys() {
       "inline-flex",
       "items-center",
       "rounded",
-      "border",
-      "border-gray-200",
       "px-2",
-      "font-sans",
       "text-sm",
       "font-medium",
       "text-gray-500",
-      "shadow-sm",
-      "bg-white/95"
+      "bg-white"
     )
     hint.textContent = key
     const hintWrapper = document.createElement("div")
@@ -701,32 +734,30 @@ function useComposerHotkeys() {
 }
 
 function useNewTweetHotkeys() {
-  const [url, setUrl] = useState<number>()
-  const newTweetButtonHint = useRef<HTMLElement>(generateHint("."))
+  const newTweetButtonHint = generateHint(".")
 
-  useTweetObserver((tweets) => {
-    setUrl(tweets.length)
+  findByTestId(document.body, "primaryColumn").then((primaryColumn) => {
+    const newTweetBar =
+      primaryColumn.firstElementChild?.firstElementChild?.lastElementChild
+    if (!(newTweetBar instanceof HTMLElement)) return
 
-    return null
-  })
+    if (newTweetBar) {
+      const observer = new MutationObserver(() => {
+        findByRole(newTweetBar, "button", {
+          name: /new tweets/i,
+          hidden: true,
+        }).then(
+          (newTweetPrompt) => {
+            newTweetPrompt.style.flexDirection = "row"
+            newTweetPrompt.appendChild(newTweetButtonHint)
+          },
+          () => logVerboseError("Failed to find new tweets button")
+        )
+      })
 
-  useEffect(() => {
-    findByRole(document.body, "button", {
-      name: /new tweets/i,
-      hidden: true,
-    }).then(
-      (newTweetPrompt) => {
-        newTweetPrompt.style.flexDirection = "row"
-        newTweetPrompt.appendChild(newTweetButtonHint.current)
-      },
-      () => console.error("Failed to find new tweets button")
-    )
-
-    return function cleanup() {
-      newTweetButtonHint.current.remove()
-      newTweetButtonHint.current.innerHTML = ""
+      observer.observe(newTweetBar, { childList: true })
     }
-  }, [url])
+  })
 
   function generateHint(key: string) {
     const hint = document.createElement("kbd")
@@ -737,12 +768,12 @@ function useNewTweetHotkeys() {
       "border",
       "border-gray-200",
       "px-2",
-      "font-sans",
+
       "text-sm",
       "font-medium",
       "text-gray-500",
-      "shadow-sm",
-      "bg-white/95"
+      "bg-[#f7f9f9]",
+      "shadow-crisp"
     )
     hint.textContent = key
     const hintWrapper = document.createElement("div")
@@ -754,87 +785,94 @@ function useNewTweetHotkeys() {
 }
 
 function useTweetHotkeys() {
-  const likeButtonHint = useRef<HTMLElement>(generateHint("L"))
-  const retweetButtonHint = useRef<HTMLElement>(generateHint("T"))
-  const replyButtonHint = useRef<HTMLElement>(generateHint("R"))
-  const shareButtonHint = useRef<HTMLElement>(generateHint("S"))
-  const additionalActionsHint = useRef<HTMLElement>(
-    document.createElement("div")
-  )
-  const muteActionHint = useRef<HTMLElement>(generateActionHint("Mute", "U"))
-  const blockActionHint = useRef<HTMLElement>(generateActionHint("Block", "X"))
-  const bookmarkActionHint = useRef<HTMLElement>(
-    generateActionHint("Bookmark", "B")
-  )
-  useEffect(() => {
-    const focusListener = ({ target }) => {
-      if (!(target instanceof HTMLElement)) return
-      if (target.tagName !== "ARTICLE") return
-      if (target.dataset.testid !== "tweet") return
+  const likeButtonHint = generateHint("L")
+  const retweetButtonHint = generateHint("T")
+  const replyButtonHint = generateHint("R")
+  const shareButtonHint = generateHint("S")
+  const minimizeButtonHint = generateHint("E")
+  const additionalActionsHint = document.createElement("div")
+  const nextTweetActionHint = generateActionHint("Next", "J")
+  const prevTweetActionHint = generateActionHint("Previous", "K")
+  const bookmarkActionHint = generateActionHint("Bookmark", "B")
+  const muteActionHint = generateActionHint("Mute", "U")
+  const blockActionHint = generateActionHint("Block", "X")
 
-      console.log("Focused on tweet")
+  const focusListener = ({ target }) => {
+    if (!(target instanceof HTMLElement)) return
+    if (target.tagName !== "ARTICLE") return
+    if (target.dataset.testid !== "tweet") return
 
-      const likeButton = queryByTestId(target, "like")
-      likeButton?.appendChild(likeButtonHint.current)
+    const likeButton = queryByTestId(target, "like")
+    likeButton?.appendChild(likeButtonHint)
 
-      const unlikeButton = queryByTestId(target, "unlike")
-      unlikeButton?.appendChild(likeButtonHint.current)
+    const unlikeButton = queryByTestId(target, "unlike")
+    unlikeButton?.appendChild(likeButtonHint)
 
-      const retweetButton = queryByTestId(target, "retweet")
-      retweetButton?.appendChild(retweetButtonHint.current)
+    const retweetButton = queryByTestId(target, "retweet")
+    retweetButton?.appendChild(retweetButtonHint)
 
-      const unretweetButton = queryByTestId(target, "unretweet")
-      unretweetButton?.appendChild(retweetButtonHint.current)
+    const unretweetButton = queryByTestId(target, "unretweet")
+    unretweetButton?.appendChild(retweetButtonHint)
 
-      const replyButton = queryByTestId(target, "reply")
-      replyButton?.appendChild(replyButtonHint.current)
+    const replyButton = queryByTestId(target, "reply")
+    replyButton?.appendChild(replyButtonHint)
 
-      const shareButton = queryByRole(target, "button", {
-        name: /share tweet/i,
-      })
-      shareButton?.appendChild(shareButtonHint.current)
+    const shareButton = queryByRole(target, "button", {
+      name: /share tweet/i,
+    })
+    shareButton?.appendChild(shareButtonHint)
 
-      const header = getByTestId(document.body, "primaryColumn")
-      header?.firstElementChild?.firstElementChild?.appendChild(
-        additionalActionsHint.current
-      )
-      additionalActionsHint.current.classList.add(
-        "flex",
-        "absolute",
-        "right-0",
-        "bottom-0",
-        "px-1",
-        "translate-y-1/2",
-        "gap-x-1"
-      )
+    const minimizeButton = queryByTestId(target, "minimize")
+    minimizeButton?.appendChild(minimizeButtonHint)
 
-      additionalActionsHint.current.appendChild(bookmarkActionHint.current)
-      additionalActionsHint.current.appendChild(muteActionHint.current)
-      additionalActionsHint.current.appendChild(blockActionHint.current)
-    }
+    const header = getByTestId(document.body, "primaryColumn")
+    header?.firstElementChild?.firstElementChild?.appendChild(
+      additionalActionsHint
+    )
+    additionalActionsHint.classList.add(
+      "absolute",
+      "bg-white/95",
+      "border-gray-200",
+      "border",
+      "bottom-0",
+      "flex",
+      "gap-x-4",
+      "px-2",
+      "py-1",
+      "right-0",
+      "rounded",
+      "text-gray-500",
+      "text-sm",
+      "translate-y-1/2"
+    )
 
-    const blurListener = ({ target }) => {
-      if (!(target instanceof HTMLElement)) return
-      if (target.tagName !== "ARTICLE") return
-      if (target.dataset.testid !== "tweet") return
+    additionalActionsHint.appendChild(nextTweetActionHint)
+    additionalActionsHint.appendChild(prevTweetActionHint)
+    additionalActionsHint.appendChild(bookmarkActionHint)
+    additionalActionsHint.appendChild(muteActionHint)
+    additionalActionsHint.appendChild(blockActionHint)
+  }
 
-      likeButtonHint.current.remove()
-      retweetButtonHint.current.remove()
-      replyButtonHint.current.remove()
-      shareButtonHint.current.remove()
-      additionalActionsHint.current.remove()
-      muteActionHint.current.remove()
-      blockActionHint.current.remove()
-    }
+  const blurListener = ({ target }) => {
+    if (!(target instanceof HTMLElement)) return
+    if (target.tagName !== "ARTICLE") return
+    if (target.dataset.testid !== "tweet") return
 
-    document.addEventListener("focusin", focusListener)
-    document.addEventListener("focusout", blurListener)
+    likeButtonHint.remove()
+    retweetButtonHint.remove()
+    replyButtonHint.remove()
+    shareButtonHint.remove()
+    minimizeButtonHint.remove()
+    additionalActionsHint.remove()
+    nextTweetActionHint.remove()
+    prevTweetActionHint.remove()
+    bookmarkActionHint.remove()
+    muteActionHint.remove()
+    blockActionHint.remove()
+  }
 
-    return function cleanup() {
-      document.removeEventListener("focusin", focusListener)
-      document.removeEventListener("focusout", blurListener)
-    }
-  }, [])
+  document.addEventListener("focusin", focusListener)
+  document.addEventListener("focusout", blurListener)
 
   function generateHint(key: string) {
     const hint = document.createElement("kbd")
@@ -843,13 +881,13 @@ function useTweetHotkeys() {
       "items-center",
       "rounded",
       "border",
-      "border-gray-200",
+      "border-gray-100",
       "px-2",
-      "font-sans",
+      "text-gray-500",
       "text-sm",
       "font-medium",
-      "text-gray-500",
-      "bg-white/95"
+      "bg-white",
+      "shadow-crisp"
     )
     hint.textContent = key
     const hintWrapper = document.createElement("div")
@@ -872,77 +910,20 @@ function useTweetHotkeys() {
       "items-center",
       "rounded",
       "border",
-      "border-gray-200",
+      "border-gray-100",
       "px-2",
       "font-medium",
-      "font-sans"
+      "bg-[#f7f9f9]",
+      "shadow-crisp"
     )
     hint.textContent = key
     const hintWrapper = document.createElement("div")
-    hintWrapper.classList.add(
-      "inline-flex",
-      "items-center",
-      "rounded",
-      "border",
-      "border-gray-200",
-      "pl-2",
-      "py-1",
-      "pr-1",
-      "text-sm",
-      "text-gray-500",
-      "bg-white/95",
-      "gap-x-2"
-    )
+    hintWrapper.classList.add("inline-flex", "items-center", "gap-x-1")
     hintWrapper.textContent = label
     hintWrapper.appendChild(hint)
 
     return hintWrapper
   }
-}
-
-function SuperTwitter() {
-  useTweetObserver((tweets) => {
-    tweets.forEach(updateDismissClassOnChildren)
-  })
-
-  useDismissTweetHotkey()
-  useNavHotkeyHints()
-  useNotificationsPageHotkeys()
-  useDraftScheduledTabHotkeys()
-  useComposerHotkeys()
-  useNewTweetHotkeys()
-  useTweetHotkeys()
-
-  return (
-    <>
-      <style>
-        {
-          /* css */ `
-        .dismissed:has(article[tabindex="-1"]) {
-          opacity: 0.5;
-        }
-
-        .dismissed {
-          // display: none;
-          opacity: 0.8;
-        }
-
-        .dismissed:has(article[tabindex="0"]) article *:not([data-testid="User-Names"]):not(:has([data-testid="User-Names"])) {
-          display: none;
-        }
-
-        .dismissed:has(article[tabindex="0"]) article * {
-          padding: 0;
-        }
-
-        .dismissed:has(article[tabindex="0"]) article [data-testid="User-Names"] * {
-          display: initial !important;
-        }
-      `.trim()
-        }
-      </style>
-    </>
-  )
 }
 
 function getTweetId(url) {
