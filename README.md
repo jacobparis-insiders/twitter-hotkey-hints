@@ -1,1 +1,1 @@
-# SuperTwitter Extension
+# Twitter Hotkey Hints Chrome Extension
